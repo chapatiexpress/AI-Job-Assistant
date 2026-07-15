@@ -7,8 +7,6 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<button id="propsToggleBtn" type="button">Properties</button>
-
 <div id="propertiesPanel">
   <div class="panel-header">
     <div class="panel-header-top">
@@ -40,11 +38,32 @@
 </div>
 <div id="panelBackdrop"></div>
 
-<div id="app" class="page-view active">
-  <header>
-    <h1>AI JOB ASSISTANT</h1>
-    <p>AI-powered job application automation workflow</p>
-  </header>
+<div id="mainWrap">
+  <nav id="topNav">
+    <div class="topnav-left">
+      <div class="topnav-logo-icon">🤖</div>
+      <div class="topnav-logo-text">AI JOB ASSISTANT</div>
+    </div>
+    <div class="topnav-links">
+      <button class="topnav-link" type="button" data-page="dashboard">Dashboard</button>
+      <button class="topnav-link" type="button" id="topWorkflowBtn" data-page="workflow">Workflow</button>
+      <button class="topnav-link" type="button" data-page="applications">Applications</button>
+      <button class="topnav-link" type="button" data-page="analytics">Analytics</button>
+      <button class="topnav-link" type="button" id="topProfileBtn" data-page="profile">Profile</button>
+    </div>
+    <div class="topnav-right">
+      <button id="propsToggleBtn" class="topnav-icon-btn" type="button" title="Toggle Properties Panel">☰</button>
+      <button class="topnav-icon-btn" type="button" title="Notifications">🔔</button>
+      <div class="topnav-user">
+        <div class="topnav-avatar" id="topnavAvatar">AU</div>
+        <span class="topnav-username" id="topnavUsername">Admin User</span>
+        <span class="topnav-chevron">⌄</span>
+      </div>
+    </div>
+  </nav>
+
+  <div id="pageArea">
+  <div id="app" class="page-view active">
   <div id="viewport">
     <div id="canvas">
       <svg id="lines"><defs>
@@ -82,19 +101,21 @@
 <div id="profilePage" class="page-view" hidden>
   <div class="profile-shell">
     <div class="profile-header">
-      <div>
-        <h2>Profile</h2>
-        <p>Manage your profile, resume and job preferences</p>
+      <div class="profile-header-left">
+        <div class="profile-title-icon">👤</div>
+        <div>
+          <h2>Profile</h2>
+          <p>Manage your profile, resume and job preferences</p>
+        </div>
       </div>
       <div class="profile-header-right">
-        <div id="profileLastUpdated" class="profile-last-updated">Last Updated: —</div>
-        <button id="saveProfileBtn" class="profile-save-btn" type="button">Save Profile</button>
+        <div id="profileLastUpdated" class="profile-last-updated"><span class="profile-last-updated-icon">📅</span> Last Updated: —</div>
       </div>
     </div>
 
     <div class="profile-grid">
       <section class="profile-card profile-card-personal">
-        <div class="profile-card-title">Personal Information</div>
+        <div class="profile-card-title"><span class="pc-icon pc-icon-blue">👤</span>Personal Information</div>
         <div class="profile-card-grid">
           <div class="profile-avatar-panel">
             <div id="profilePhotoPreview" class="profile-photo">AU</div>
@@ -135,7 +156,7 @@
       </section>
 
       <section class="profile-card profile-card-professional">
-        <div class="profile-card-title">Professional Information</div>
+        <div class="profile-card-title"><span class="pc-icon pc-icon-indigo">💼</span>Professional Information</div>
         <div class="profile-fields profile-fields-grid">
           <div class="field">
             <label for="profileJobTitle">Current Job Title</label>
@@ -181,30 +202,32 @@
       </section>
 
       <section class="profile-card profile-card-resume">
-        <div class="profile-card-title">Resume Management</div>
+        <div class="profile-card-title"><span class="pc-icon pc-icon-green">📄</span>Resume Management</div>
         <div class="resume-card-inner">
           <div class="resume-file-row">
             <div class="resume-icon">📄</div>
-            <div>
+            <div class="resume-name-block">
               <div id="resumeName" class="resume-name">No Resume Uploaded</div>
               <div id="resumeInfoText" class="resume-info-text">PDF and DOCX supported</div>
             </div>
-            <div id="resumeStatusBadge" class="resume-status-badge profile-status-warning">⚠ No Resume Uploaded</div>
+            <div class="resume-status-block">
+              <div id="resumeStatusBadge" class="resume-status-badge profile-status-warning">⚠ No Resume Uploaded</div>
+              <div id="resumeUploadedDate" class="resume-uploaded-date"></div>
+            </div>
           </div>
-          <div id="resumeMeta" class="resume-meta-list">No resume selected</div>
-          <div class="profile-actions">
-            <button id="uploadResumeBtn" class="btn-panel btn-save profile-action-btn" type="button">Upload Resume</button>
-            <button id="replaceResumeBtn" class="btn-panel btn-save profile-action-btn" type="button">Replace Resume</button>
-            <button id="downloadResumeBtn" class="btn-panel btn-delete profile-action-btn" type="button">Download Resume</button>
-            <button id="deleteResumeBtn" class="btn-panel btn-delete profile-action-btn" type="button">Delete Resume</button>
+          <div class="resume-actions">
+            <button id="uploadResumeBtn" class="btn-panel btn-save profile-action-btn" type="button">⬆ Upload New</button>
+            <button id="replaceResumeBtn" class="btn-panel btn-outline profile-action-btn" type="button">🔄 Replace</button>
+            <button id="downloadResumeBtn" class="btn-panel btn-neutral profile-action-btn" type="button">⬇ Download</button>
+            <button id="deleteResumeBtn" class="btn-panel btn-delete profile-action-btn" type="button">🗑 Delete</button>
           </div>
-          <div class="profile-support-text">Supported file types: PDF, DOCX</div>
+          <div class="profile-support-text">Supported formats: PDF, DOCX (Max 10MB)</div>
         </div>
       </section>
 
       <section class="profile-card profile-card-ai">
-        <div class="profile-card-title">AI Preferences</div>
-        <div class="profile-fields profile-fields-grid">
+        <div class="profile-card-title"><span class="pc-icon pc-icon-purple">🤖</span>AI Preferences</div>
+        <div class="profile-fields profile-fields-grid ai-top-fields">
           <div class="field">
             <label for="profileAiModel">Preferred AI Model</label>
             <select id="profileAiModel" class="field-input">
@@ -216,30 +239,36 @@
           </div>
           <div class="field">
             <label for="profileMinMatchScore">Minimum Match Score</label>
-            <input id="profileMinMatchScore" class="field-input" type="range" min="0" max="100" value="75">
-            <div class="range-label"><span id="minMatchScoreValue">75</span>%</div>
+            <div class="input-suffix-wrap">
+              <input id="profileMinMatchScore" class="field-input" type="number" min="0" max="100" value="75">
+              <span class="input-suffix">%</span>
+            </div>
+            <span id="minMatchScoreValue" hidden>75</span>
           </div>
           <div class="field">
             <label for="profileDailyLimit">Daily Application Limit</label>
             <input id="profileDailyLimit" class="field-input" type="number" min="1" value="30">
           </div>
-          <div class="field field-switch">
+        </div>
+        <div class="ai-toggles-row">
+          <div class="field field-switch-col">
             <label>Auto Generate Cover Letter</label>
             <label class="switch"><input id="profileAutoCover" type="checkbox"><span class="slider"></span></label>
           </div>
-          <div class="field field-switch">
+          <div class="field field-switch-col">
             <label>Enable Auto Apply</label>
             <label class="switch"><input id="profileAutoApply" type="checkbox"><span class="slider"></span></label>
           </div>
-          <div class="field field-switch">
+          <div class="field field-switch-col">
             <label>Smart Job Matching</label>
             <label class="switch"><input id="profileSmartMatch" type="checkbox"><span class="slider"></span></label>
           </div>
-          <div class="field field-switch">
+          <div class="field field-switch-col">
             <label>Email Notifications</label>
             <label class="switch"><input id="profileEmailNotifications" type="checkbox"><span class="slider"></span></label>
           </div>
         </div>
+        <div class="ai-info-box">These preferences will be used by the automation workflow to apply for relevant jobs.</div>
       </section>
     </div>
 
@@ -251,6 +280,8 @@
   <input id="resumeFileInput" type="file" accept=".pdf,.doc,.docx" hidden>
   <input id="photoFileInput" type="file" accept=".jpg,.jpeg,.png" hidden>
 </div>
+  </div><!-- /#pageArea -->
+</div><!-- /#mainWrap -->
 
 <script src="script.js"></script>
 </body>
