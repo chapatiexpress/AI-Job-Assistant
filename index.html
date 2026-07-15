@@ -28,8 +28,8 @@
     </div>
   </div>
   <div class="panel-page-nav" id="pageNav">
-    <button id="workflowNavBtn" class="page-nav-btn active" type="button">Workflow</button>
-    <button id="profileNavBtn" class="page-nav-btn" type="button">Profile</button>
+    <button id="workflowNavBtn" class="page-nav-btn active" type="button" data-page="workflow">Workflow</button>
+    <button id="profileNavBtn" class="page-nav-btn" type="button" data-page="profile">Profile</button>
   </div>
   <div class="panel-footer" id="panelFooter" style="display:none;">
     <button id="panelDelete" class="btn-panel btn-delete">Delete</button>
@@ -280,6 +280,31 @@
   <input id="resumeFileInput" type="file" accept=".pdf,.doc,.docx" hidden>
   <input id="photoFileInput" type="file" accept=".jpg,.jpeg,.png" hidden>
 </div>
+
+<div id="dashboardPage" class="page-view" hidden>
+  <div class="placeholder-page">
+    <div class="placeholder-icon">📊</div>
+    <h2>Dashboard</h2>
+    <p>Your application stats and activity overview will live here.</p>
+  </div>
+</div>
+
+<div id="applicationsPage" class="page-view" hidden>
+  <div class="placeholder-page">
+    <div class="placeholder-icon">🗂️</div>
+    <h2>Applications</h2>
+    <p>Track every job application submitted by the automation workflow here.</p>
+  </div>
+</div>
+
+<div id="analyticsPage" class="page-view" hidden>
+  <div class="placeholder-page">
+    <div class="placeholder-icon">📈</div>
+    <h2>Analytics</h2>
+    <p>Match-score trends, response rates, and other insights will appear here.</p>
+  </div>
+</div>
+
   </div><!-- /#pageArea -->
 </div><!-- /#mainWrap -->
 
