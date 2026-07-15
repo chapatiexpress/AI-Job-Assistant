@@ -572,6 +572,8 @@ function loadProfileState(){
   }
 }
 
+profileState = loadProfileState();
+
 function saveProfileState(){
   localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profileState));
 }
