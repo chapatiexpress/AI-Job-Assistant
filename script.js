@@ -1022,30 +1022,23 @@ document.getElementById('panelDelete').addEventListener('click', ()=>{
   flashButton(document.getElementById('panelDelete'), 'Reset ✓');
 });
 
-let propsToggleAttached = false;
-propsToggleBtn?.addEventListener('click', ()=>{
-  console.log('[Props] direct click handler invoked');
-  if(panel && panel.classList.contains('open')) closePanel();
-  else {
-    openPanel();
-    if(!selectedNodeId) showEmptyState();
-  }
-});
-if(propsToggleBtn) propsToggleAttached = true;
+// Remove direct listener in favor of a single delegated handler below.
+// This is more robust if the button element is re-rendered or covered.
 panelCloseBtn?.addEventListener('click', closePanel);
 panelBackdrop?.addEventListener('click', closePanel); // backdrop only visible/active on small screens
 panel?.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let clicks inside the panel bubble to canvas/viewport
 
 // Fallback: delegate clicks so the toggle still works if direct binding fails
 document.addEventListener('click', (e)=>{
-  const btn = e.target.closest && e.target.closest('#propsToggleBtn');
+  if(!e.target || !e.target.closest) return;
+  const btn = e.target.closest('#propsToggleBtn');
   if(!btn) return;
-  if(propsToggleAttached){
-    // direct handler present; ignore to avoid double-toggle
-    console.log('[Props] delegated handler skipped because direct handler exists');
-    return;
+  // Toggle the panel reliably
+  try{
+    if(panel && panel.classList.contains('open')) closePanel();
+    else { openPanel(); if(!selectedNodeId) showEmptyState(); }
+    console.log('[Props] toggle invoked via delegated handler');
+  }catch(err){
+    console.error('[Props] toggle error', err);
   }
-  console.log('[Props] delegated handler invoked');
-  if(panel && panel.classList.contains('open')) closePanel();
-  else { openPanel(); if(!selectedNodeId) showEmptyState(); }
 });
