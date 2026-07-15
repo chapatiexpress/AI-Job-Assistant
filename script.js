@@ -1022,13 +1022,16 @@ document.getElementById('panelDelete').addEventListener('click', ()=>{
   flashButton(document.getElementById('panelDelete'), 'Reset ✓');
 });
 
+let propsToggleAttached = false;
 propsToggleBtn?.addEventListener('click', ()=>{
+  console.log('[Props] direct click handler invoked');
   if(panel && panel.classList.contains('open')) closePanel();
   else {
     openPanel();
     if(!selectedNodeId) showEmptyState();
   }
 });
+if(propsToggleBtn) propsToggleAttached = true;
 panelCloseBtn?.addEventListener('click', closePanel);
 panelBackdrop?.addEventListener('click', closePanel); // backdrop only visible/active on small screens
 panel?.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let clicks inside the panel bubble to canvas/viewport
@@ -1037,6 +1040,12 @@ panel?.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let 
 document.addEventListener('click', (e)=>{
   const btn = e.target.closest && e.target.closest('#propsToggleBtn');
   if(!btn) return;
+  if(propsToggleAttached){
+    // direct handler present; ignore to avoid double-toggle
+    console.log('[Props] delegated handler skipped because direct handler exists');
+    return;
+  }
+  console.log('[Props] delegated handler invoked');
   if(panel && panel.classList.contains('open')) closePanel();
   else { openPanel(); if(!selectedNodeId) showEmptyState(); }
 });
