@@ -506,6 +506,9 @@ const panelBody = document.getElementById('panelBody');
 const panelFooter = document.getElementById('panelFooter');
 const workflowNavBtn = document.getElementById('workflowNavBtn');
 const profileNavBtn = document.getElementById('profileNavBtn');
+const topWorkflowBtn = document.getElementById('topWorkflowBtn');
+const topProfileBtn = document.getElementById('topProfileBtn');
+const topNavPlaceholderLinks = document.querySelectorAll('.topnav-link[data-page="dashboard"], .topnav-link[data-page="applications"], .topnav-link[data-page="analytics"]');
 const workflowPage = document.getElementById('app');
 const profilePage = document.getElementById('profilePage');
 
@@ -519,10 +522,16 @@ function setActivePage(page){
   profilePage.hidden = isWorkflow;
   workflowNavBtn.classList.toggle('active', isWorkflow);
   profileNavBtn.classList.toggle('active', !isWorkflow);
+  if(topWorkflowBtn) topWorkflowBtn.classList.toggle('active', isWorkflow);
+  if(topProfileBtn) topProfileBtn.classList.toggle('active', !isWorkflow);
   if(isWorkflow) renderProfileNodeCard();
 }
 workflowNavBtn.addEventListener('click', ()=>setActivePage('workflow'));
 profileNavBtn.addEventListener('click', ()=>setActivePage('profile'));
+if(topWorkflowBtn) topWorkflowBtn.addEventListener('click', ()=>setActivePage('workflow'));
+if(topProfileBtn) topProfileBtn.addEventListener('click', ()=>setActivePage('profile'));
+/* Dashboard / Applications / Analytics are not built yet — keep them inert but interactive-looking */
+topNavPlaceholderLinks.forEach(btn=>btn.addEventListener('click', ()=>{}));
 setActivePage('workflow');
 
 const PROFILE_STORAGE_KEY = 'ajaProfileData';
@@ -554,7 +563,7 @@ const profileFields = {
   resumeName: document.getElementById('resumeName'),
   resumeInfoText: document.getElementById('resumeInfoText'),
   resumeStatusBadge: document.getElementById('resumeStatusBadge'),
-  resumeMeta: document.getElementById('resumeMeta'),
+  resumeUploadedDate: document.getElementById('resumeUploadedDate'),
   profilePhotoPreview: document.getElementById('profilePhotoPreview'),
   profileLastUpdated: document.getElementById('profileLastUpdated'),
   resumeFileInput: document.getElementById('resumeFileInput'),
@@ -571,8 +580,6 @@ function loadProfileState(){
     return {};
   }
 }
-
-profileState = loadProfileState();
 
 function saveProfileState(){
   localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profileState));
@@ -630,61 +637,27 @@ function updateProfileHeader(){
   profileFields.profileLastUpdated.textContent = `Last Updated: ${formatDateTime(profileState.lastUpdatedAt)}`;
 }
 
+function resumeTypeLabel(){
+  const t = (profileState.resumeFileType || '').toLowerCase();
+  if(t.includes('pdf')) return 'PDF Document';
+  if(t.includes('word') || t.includes('docx') || t.includes('doc')) return 'DOCX Document';
+  return profileState.resumeFileType || 'Document';
+}
+
 function updateResumeStatus(){
   const hasResume = !!(profileState.resumeUploaded && profileState.resumeDataUrl);
 
-  if(profileFields.resumeStatusBadge){
-    profileFields.resumeStatusBadge.textContent =
-      hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
+  profileFields.resumeStatusBadge.textContent = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
+  profileFields.resumeStatusBadge.classList.toggle('profile-status-good', hasResume);
+  profileFields.resumeStatusBadge.classList.toggle('profile-status-warning', !hasResume);
 
-    profileFields.resumeStatusBadge.classList.toggle(
-      'profile-status-good',
-      hasResume
-    );
-
-    profileFields.resumeStatusBadge.classList.toggle(
-      'profile-status-warning',
-      !hasResume
-    );
-  }
-
-  if(profileFields.resumeName){
-    profileFields.resumeName.textContent =
-      hasResume
-      ? profileState.resumeFileName || 'Resume Document'
-      : 'No Resume Uploaded';
-  }
-
-  if(profileFields.resumeInfoText){
-    profileFields.resumeInfoText.textContent =
-      hasResume
-      ? `${profileState.resumeFileType || 'PDF'} • ${formatBytes(profileState.resumeFileSize)} • Uploaded ${formatDateTime(profileState.resumeUploadedAt)}`
-      : 'PDF and DOCX supported';
-  }
-
-  if(profileFields.resumeMeta){
-    if(hasResume){
-      profileFields.resumeMeta.innerHTML = `
-        <div><strong>File Name:</strong> ${escapeHtml(profileState.resumeFileName || 'resume')}</div>
-        <div><strong>File Type:</strong> ${escapeHtml(profileState.resumeFileType || '')}</div>
-        <div><strong>File Size:</strong> ${escapeHtml(formatBytes(profileState.resumeFileSize))}</div>
-        <div><strong>Upload Date:</strong> ${escapeHtml(formatDateTime(profileState.resumeUploadedAt))}</div>
-      `;
-    }else{
-      profileFields.resumeMeta.textContent = 'No resume selected';
-    }
-  }
+  profileFields.resumeName.textContent = hasResume ? (profileState.resumeFileName || 'Resume Document') : 'No Resume Uploaded';
+  profileFields.resumeInfoText.textContent = hasResume ? `${resumeTypeLabel()} • ${formatBytes(profileState.resumeFileSize)}` : 'PDF and DOCX supported';
+  profileFields.resumeUploadedDate.textContent = hasResume ? `Uploaded on ${formatDateTime(profileState.resumeUploadedAt)}` : '';
 }
+
 function renderProfileNodeCard(){
   const node = nodeState['n2'];
-
-console.log(nodeState);
-console.log(node);
-
-if (!node) {
-    console.error("Node n2 not found");
-    return;
-}
   if(!node) return;
   const hasResume = !!(profileState.resumeUploaded && profileState.resumeDataUrl);
   const skills = getSkillsFromTags().join(', ') || 'None';
@@ -878,17 +851,6 @@ profileFields.skillsInput.addEventListener('keydown', (e)=>{
   if(el.tagName === 'INPUT') el.addEventListener('input', ()=>{ if(el.type !== 'range') return; profileFields.minMatchScoreValue.textContent = el.value; autoSaveProfileData(); });
 });
 
-function setActivePage(page){
-  const isWorkflow = page === 'workflow';
-  workflowPage.classList.toggle('active', isWorkflow);
-  profilePage.classList.toggle('active', !isWorkflow);
-  workflowPage.hidden = !isWorkflow;
-  profilePage.hidden = isWorkflow;
-  workflowNavBtn.classList.toggle('active', isWorkflow);
-  profileNavBtn.classList.toggle('active', !isWorkflow);
-  if(isWorkflow) renderProfileNodeCard();
-}
-
 document.addEventListener('click', (event) => {
   const openBtn = event.target.closest('.open-profile-btn');
   if(!openBtn) return;
@@ -898,14 +860,16 @@ document.addEventListener('click', (event) => {
 function openPanel(){
   panel.classList.add('open');
   document.body.classList.add('panel-open');
-  propsToggleBtn.textContent = 'Close Properties';
+  propsToggleBtn.textContent = '✕';
   propsToggleBtn.classList.add('active');
+  propsToggleBtn.title = 'Close Properties Panel';
 }
 function closePanel(){
   panel.classList.remove('open');
   document.body.classList.remove('panel-open');
-  propsToggleBtn.textContent = 'Properties';
+  propsToggleBtn.textContent = '☰';
   propsToggleBtn.classList.remove('active');
+  propsToggleBtn.title = 'Toggle Properties Panel';
   if(selectedNodeId && nodeState[selectedNodeId]){
     nodeState[selectedNodeId].el.classList.remove('selected');
   }
