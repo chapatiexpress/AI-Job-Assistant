@@ -677,6 +677,14 @@ function updateResumeStatus(){
 }
 function renderProfileNodeCard(){
   const node = nodeState['n2'];
+
+console.log(nodeState);
+console.log(node);
+
+if (!node) {
+    console.error("Node n2 not found");
+    return;
+}
   if(!node) return;
   const hasResume = !!(profileState.resumeUploaded && profileState.resumeDataUrl);
   const skills = getSkillsFromTags().join(', ') || 'None';
