@@ -29,6 +29,10 @@
       <p>Select a card on the canvas to configure it here.</p>
     </div>
   </div>
+  <div class="panel-page-nav" id="pageNav">
+    <button id="workflowNavBtn" class="page-nav-btn active" type="button">Workflow</button>
+    <button id="profileNavBtn" class="page-nav-btn" type="button">Profile</button>
+  </div>
   <div class="panel-footer" id="panelFooter" style="display:none;">
     <button id="panelDelete" class="btn-panel btn-delete">Delete</button>
     <button id="panelSave" class="btn-panel btn-save">Save Changes</button>
@@ -36,7 +40,7 @@
 </div>
 <div id="panelBackdrop"></div>
 
-<div id="app">
+<div id="app" class="page-view active">
   <header>
     <h1>AI JOB ASSISTANT</h1>
     <p>AI-powered job application automation workflow</p>
@@ -73,6 +77,91 @@
     <button id="zout">−</button>
     <button id="zreset" title="Reset view" style="font-size:13px;">⟳</button>
   </div>
+</div>
+
+<div id="profilePage" class="page-view" hidden>
+  <div class="profile-shell">
+    <div class="profile-header">
+      <div>
+        <h2>Profile</h2>
+        <p>Manage your personal details and resume for AI-powered job automation.</p>
+      </div>
+      <button id="saveProfileBtn" class="profile-save-btn" type="button">Save Profile</button>
+    </div>
+
+    <div class="profile-grid">
+      <section class="profile-card">
+        <div class="profile-card-title">Personal Information</div>
+        <div class="profile-photo-row">
+          <div class="profile-photo">👤</div>
+          <div class="profile-photo-actions">
+            <div id="resumeStatus" class="profile-status profile-status-warning">⚠ No Resume Uploaded</div>
+            <div class="profile-photo-hint">Profile photo is stored locally in this browser.</div>
+          </div>
+        </div>
+        <div class="profile-fields">
+          <div class="field">
+            <label for="profileFirstName">First Name</label>
+            <input id="profileFirstName" class="field-input" type="text" placeholder="Alex">
+          </div>
+          <div class="field">
+            <label for="profileLastName">Last Name</label>
+            <input id="profileLastName" class="field-input" type="text" placeholder="Walker">
+          </div>
+          <div class="field">
+            <label for="profileEmail">Email</label>
+            <input id="profileEmail" class="field-input" type="email" placeholder="alex@example.com">
+          </div>
+          <div class="field">
+            <label for="profilePhone">Phone Number</label>
+            <input id="profilePhone" class="field-input" type="tel" placeholder="+1 555 0100">
+          </div>
+          <div class="field">
+            <label for="profileLocation">Location</label>
+            <input id="profileLocation" class="field-input" type="text" placeholder="Remote / New York">
+          </div>
+        </div>
+      </section>
+
+      <section class="profile-card">
+        <div class="profile-card-title">Professional Information</div>
+        <div class="profile-fields">
+          <div class="field">
+            <label for="profileSkills">Skills</label>
+            <input id="profileSkills" class="field-input" type="text" placeholder="JavaScript, React, Node.js">
+          </div>
+          <div class="field">
+            <label for="profileExperience">Experience</label>
+            <input id="profileExperience" class="field-input" type="text" placeholder="3+ years">
+          </div>
+          <div class="field">
+            <label for="profileEducation">Education</label>
+            <input id="profileEducation" class="field-input" type="text" placeholder="B.Sc. in Computer Science">
+          </div>
+          <div class="field">
+            <label for="profileRoles">Preferred Roles</label>
+            <input id="profileRoles" class="field-input" type="text" placeholder="Frontend Developer, Product Engineer">
+          </div>
+          <div class="field">
+            <label for="profilePreferredLocations">Preferred Locations</label>
+            <input id="profilePreferredLocations" class="field-input" type="text" placeholder="Remote, London, Berlin">
+          </div>
+        </div>
+      </section>
+
+      <section class="profile-card">
+        <div class="profile-card-title">Resume</div>
+        <div class="profile-actions">
+          <button id="uploadResumeBtn" class="btn-panel btn-save profile-action-btn" type="button">Upload Resume</button>
+          <button id="replaceResumeBtn" class="btn-panel btn-save profile-action-btn" type="button">Replace Resume</button>
+          <button id="downloadResumeBtn" class="btn-panel btn-delete profile-action-btn" type="button">Download Resume</button>
+          <button id="deleteResumeBtn" class="btn-panel btn-delete profile-action-btn" type="button">Delete Resume</button>
+        </div>
+        <div id="resumeMeta" class="profile-file-meta">No resume selected</div>
+      </section>
+    </div>
+  </div>
+  <input id="resumeFileInput" type="file" accept=".pdf,.doc,.docx,.txt" hidden>
 </div>
 
 <script src="script.js"></script>
