@@ -504,8 +504,147 @@ const panelName = document.getElementById('panelName');
 const panelDesc = document.getElementById('panelDesc');
 const panelBody = document.getElementById('panelBody');
 const panelFooter = document.getElementById('panelFooter');
+const workflowNavBtn = document.getElementById('workflowNavBtn');
+const profileNavBtn = document.getElementById('profileNavBtn');
+const workflowPage = document.getElementById('app');
+const profilePage = document.getElementById('profilePage');
 
 let selectedNodeId = null;
+
+function setActivePage(page){
+  const isWorkflow = page === 'workflow';
+  workflowPage.classList.toggle('active', isWorkflow);
+  profilePage.classList.toggle('active', !isWorkflow);
+  workflowPage.hidden = !isWorkflow;
+  profilePage.hidden = isWorkflow;
+  workflowNavBtn.classList.toggle('active', isWorkflow);
+  profileNavBtn.classList.toggle('active', !isWorkflow);
+}
+workflowNavBtn.addEventListener('click', ()=>setActivePage('workflow'));
+profileNavBtn.addEventListener('click', ()=>setActivePage('profile'));
+setActivePage('workflow');
+
+const PROFILE_STORAGE_KEY = 'ajaProfileData';
+const profileFields = {
+  firstName: document.getElementById('profileFirstName'),
+  lastName: document.getElementById('profileLastName'),
+  email: document.getElementById('profileEmail'),
+  phone: document.getElementById('profilePhone'),
+  location: document.getElementById('profileLocation'),
+  skills: document.getElementById('profileSkills'),
+  experience: document.getElementById('profileExperience'),
+  education: document.getElementById('profileEducation'),
+  roles: document.getElementById('profileRoles'),
+  preferredLocations: document.getElementById('profilePreferredLocations'),
+  resumeStatus: document.getElementById('resumeStatus'),
+  resumeMeta: document.getElementById('resumeMeta'),
+  fileInput: document.getElementById('resumeFileInput')
+};
+
+let profileState = {};
+
+function loadProfileState(){
+  try{
+    const saved = JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY) || '{}');
+    return saved || {};
+  }catch(e){
+    return {};
+  }
+}
+
+function saveProfileState(){
+  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profileState));
+}
+
+function updateResumeStatus(){
+  const hasResume = !!(profileState.resumeUploaded && profileState.resumeDataUrl);
+  profileFields.resumeStatus.textContent = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
+  profileFields.resumeStatus.classList.toggle('profile-status-good', hasResume);
+  profileFields.resumeStatus.classList.toggle('profile-status-warning', !hasResume);
+  profileFields.resumeMeta.textContent = hasResume ? `Current file: ${profileState.resumeFileName || 'resume'}` : 'No resume selected';
+}
+
+function populateProfileForm(){
+  profileFields.firstName.value = profileState.firstName || '';
+  profileFields.lastName.value = profileState.lastName || '';
+  profileFields.email.value = profileState.email || '';
+  profileFields.phone.value = profileState.phone || '';
+  profileFields.location.value = profileState.location || '';
+  profileFields.skills.value = profileState.skills || '';
+  profileFields.experience.value = profileState.experience || '';
+  profileFields.education.value = profileState.education || '';
+  profileFields.roles.value = profileState.roles || '';
+  profileFields.preferredLocations.value = profileState.preferredLocations || '';
+  updateResumeStatus();
+}
+
+function collectProfileState(){
+  return {
+    firstName: profileFields.firstName.value.trim(),
+    lastName: profileFields.lastName.value.trim(),
+    email: profileFields.email.value.trim(),
+    phone: profileFields.phone.value.trim(),
+    location: profileFields.location.value.trim(),
+    skills: profileFields.skills.value.trim(),
+    experience: profileFields.experience.value.trim(),
+    education: profileFields.education.value.trim(),
+    roles: profileFields.roles.value.trim(),
+    preferredLocations: profileFields.preferredLocations.value.trim(),
+    resumeUploaded: !!profileState.resumeUploaded,
+    resumeFileName: profileState.resumeFileName || '',
+    resumeDataUrl: profileState.resumeDataUrl || ''
+  };
+}
+
+function saveProfileData(){
+  profileState = collectProfileState();
+  saveProfileState();
+  updateResumeStatus();
+  flashButton(document.getElementById('saveProfileBtn'), 'Saved ✓');
+}
+
+function handleResumeSelection(event){
+  const file = event.target.files && event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    profileState.resumeUploaded = true;
+    profileState.resumeFileName = file.name;
+    profileState.resumeDataUrl = reader.result;
+    saveProfileState();
+    updateResumeStatus();
+  };
+  reader.readAsDataURL(file);
+}
+
+function downloadResume(){
+  if(!profileState.resumeUploaded || !profileState.resumeDataUrl){
+    updateResumeStatus();
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = profileState.resumeDataUrl;
+  link.download = profileState.resumeFileName || 'resume';
+  link.click();
+}
+
+function deleteResume(){
+  profileState.resumeUploaded = false;
+  profileState.resumeFileName = '';
+  profileState.resumeDataUrl = '';
+  saveProfileState();
+  updateResumeStatus();
+}
+
+profileState = loadProfileState();
+populateProfileForm();
+
+profileFields.fileInput.addEventListener('change', handleResumeSelection);
+document.getElementById('uploadResumeBtn').addEventListener('click', ()=>profileFields.fileInput.click());
+document.getElementById('replaceResumeBtn').addEventListener('click', ()=>profileFields.fileInput.click());
+document.getElementById('downloadResumeBtn').addEventListener('click', downloadResume);
+document.getElementById('deleteResumeBtn').addEventListener('click', deleteResume);
+document.getElementById('saveProfileBtn').addEventListener('click', saveProfileData);
 
 function openPanel(){
   panel.classList.add('open');
