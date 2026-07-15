@@ -122,6 +122,7 @@ const connectors = [
 const nodeState = {};
 rects.forEach(r => nodeState[r.id] = {...r, shape:'rect'});
 diamonds.forEach(d => nodeState[d.id] = {...d, shape:'diamond'});
+Object.values(nodeState).forEach(n => { n.origX = n.x; n.origY = n.y; });
 
 const canvas = document.getElementById('canvas');
 const linesSvg = document.getElementById('lines');
@@ -338,7 +339,18 @@ viewport.addEventListener('wheel', (e)=>{
 
 document.getElementById('zin').onclick = ()=>{ zoomBy(1.15); };
 document.getElementById('zout').onclick = ()=>{ zoomBy(0.87); };
-document.getElementById('zreset').onclick = ()=>{ view.scale=0.62; view.tx=40; view.ty=20; applyView(); };
+document.getElementById('zreset').onclick = ()=>{
+  // restore every card/diamond to its original position
+  Object.values(nodeState).forEach(n=>{
+    n.x = n.origX;
+    n.y = n.origY;
+    n.el.style.left = n.x+'px';
+    n.el.style.top = n.y+'px';
+  });
+  renderConnectors();
+  // restore the default zoom/pan
+  view.scale=0.62; view.tx=40; view.ty=20; applyView();
+};
 function zoomBy(f){
   const rect = viewport.getBoundingClientRect();
   const mx = rect.width/2, my = rect.height/2;
