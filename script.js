@@ -252,8 +252,17 @@ function renderConnectors(){
 renderConnectors();
 
 /* ---------------- drag nodes ---------------- */
+let dragModeOn = false;
+const dragModeBtn = document.getElementById('dragmode');
+dragModeBtn.onclick = ()=>{
+  dragModeOn = !dragModeOn;
+  dragModeBtn.classList.toggle('active', dragModeOn);
+  viewport.classList.toggle('drag-mode-on', dragModeOn);
+};
+
 let dragTarget=null, dragStart=null, nodeStart=null;
 canvas.addEventListener('pointerdown', (e)=>{
+  if(!dragModeOn) return; // let it fall through to viewport panning
   const el = e.target.closest('.node,.diamond');
   if(!el) return;
   e.stopPropagation();
@@ -290,7 +299,7 @@ applyView();
 
 let panning=false, panStart=null, viewStart=null;
 viewport.addEventListener('pointerdown', (e)=>{
-  if(e.target.closest('.node,.diamond')) return;
+  if(dragModeOn && e.target.closest('.node,.diamond')) return;
   panning=true;
   viewport.classList.add('grabbing');
   panStart={x:e.clientX,y:e.clientY};
@@ -304,7 +313,15 @@ window.addEventListener('pointermove', (e)=>{
 });
 window.addEventListener('pointerup', ()=>{ panning=false; viewport.classList.remove('grabbing'); });
 
+let scrollZoomOn = false;
+const scrollZoomBtn = document.getElementById('scrollzoom');
+scrollZoomBtn.onclick = ()=>{
+  scrollZoomOn = !scrollZoomOn;
+  scrollZoomBtn.classList.toggle('active', scrollZoomOn);
+};
+
 viewport.addEventListener('wheel', (e)=>{
+  if(!scrollZoomOn) return; // scroll behaves normally until 🔍 is enabled
   e.preventDefault();
   const rect = viewport.getBoundingClientRect();
   const mx = e.clientX-rect.left, my = e.clientY-rect.top;
