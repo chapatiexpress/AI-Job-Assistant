@@ -631,9 +631,11 @@ function updateProfileHeader(){
 
 function updateResumeStatus(){
   const hasResume = !!(profileState.resumeUploaded && profileState.resumeDataUrl);
-  profileFields.resumeStatus.textContent = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
-  profileFields.resumeStatus.classList.toggle('profile-status-good', hasResume);
-  profileFields.resumeStatus.classList.toggle('profile-status-warning', !hasResume);
+  if(profileFields.resumeStatus){
+    profileFields.resumeStatus.textContent = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
+    profileFields.resumeStatus.classList.toggle('profile-status-good', hasResume);
+    profileFields.resumeStatus.classList.toggle('profile-status-warning', !hasResume);
+  }
   profileFields.resumeStatusBadge.textContent = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
   profileFields.resumeStatusBadge.classList.toggle('profile-status-good', hasResume);
   profileFields.resumeStatusBadge.classList.toggle('profile-status-warning', !hasResume);
@@ -1022,23 +1024,45 @@ document.getElementById('panelDelete').addEventListener('click', ()=>{
   flashButton(document.getElementById('panelDelete'), 'Reset ✓');
 });
 
-// Remove direct listener in favor of a single delegated handler below.
-// This is more robust if the button element is re-rendered or covered.
-panelCloseBtn?.addEventListener('click', closePanel);
-panelBackdrop?.addEventListener('click', closePanel); // backdrop only visible/active on small screens
-panel?.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let clicks inside the panel bubble to canvas/viewport
+/* ---------------- properties panel controls ---------------- */
+function togglePanel(event){
+  if(event){
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  if(!panel) return;
 
-// Fallback: delegate clicks so the toggle still works if direct binding fails
-document.addEventListener('click', (e)=>{
-  if(!e.target || !e.target.closest) return;
-  const btn = e.target.closest('#propsToggleBtn');
-  if(!btn) return;
-  // Toggle the panel reliably
-  try{
-    if(panel && panel.classList.contains('open')) closePanel();
-    else { openPanel(); if(!selectedNodeId) showEmptyState(); }
-    console.log('[Props] toggle invoked via delegated handler');
-  }catch(err){
-    console.error('[Props] toggle error', err);
+  if(panel.classList.contains('open')){
+    closePanel();
+  }else{
+    openPanel();
+    if(!selectedNodeId) showEmptyState();
+  }
+}
+
+if(propsToggleBtn){
+  propsToggleBtn.addEventListener('click', togglePanel);
+}
+
+if(panelCloseBtn){
+  panelCloseBtn.addEventListener('click', (event)=>{
+    event.preventDefault();
+    event.stopPropagation();
+    closePanel();
+  });
+}
+
+if(panelBackdrop){
+  panelBackdrop.addEventListener('click', closePanel);
+}
+
+if(panel){
+  panel.addEventListener('pointerdown', (event)=>event.stopPropagation());
+  panel.addEventListener('click', (event)=>event.stopPropagation());
+}
+
+document.addEventListener('keydown', (event)=>{
+  if(event.key === 'Escape' && panel && panel.classList.contains('open')){
+    closePanel();
   }
 });
