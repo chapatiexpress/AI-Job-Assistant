@@ -866,16 +866,18 @@ document.addEventListener('click', (event) => {
 });
 
 function openPanel(){
+  if(!panel) return;
   panel.classList.add('open');
   document.body.classList.add('panel-open');
-  propsToggleBtn.textContent = 'Close Properties';
-  propsToggleBtn.classList.add('active');
+  if(propsToggleBtn){ propsToggleBtn.textContent = 'Close Properties'; propsToggleBtn.classList.add('active'); }
+  if(panelBackdrop){ panelBackdrop.style.opacity = '1'; panelBackdrop.style.pointerEvents = 'auto'; }
 }
 function closePanel(){
+  if(!panel) return;
   panel.classList.remove('open');
   document.body.classList.remove('panel-open');
-  propsToggleBtn.textContent = 'Properties';
-  propsToggleBtn.classList.remove('active');
+  if(propsToggleBtn){ propsToggleBtn.textContent = 'Properties'; propsToggleBtn.classList.remove('active'); }
+  if(panelBackdrop){ panelBackdrop.style.opacity = '0'; panelBackdrop.style.pointerEvents = 'none'; }
   if(selectedNodeId && nodeState[selectedNodeId]){
     nodeState[selectedNodeId].el.classList.remove('selected');
   }
@@ -1020,13 +1022,13 @@ document.getElementById('panelDelete').addEventListener('click', ()=>{
   flashButton(document.getElementById('panelDelete'), 'Reset ✓');
 });
 
-propsToggleBtn.addEventListener('click', ()=>{
-  if(panel.classList.contains('open')) closePanel();
+propsToggleBtn?.addEventListener('click', ()=>{
+  if(panel && panel.classList.contains('open')) closePanel();
   else {
     openPanel();
     if(!selectedNodeId) showEmptyState();
   }
 });
-panelCloseBtn.addEventListener('click', closePanel);
-panelBackdrop.addEventListener('click', closePanel); // backdrop only visible/active on small screens
-panel.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let clicks inside the panel bubble to canvas/viewport
+panelCloseBtn?.addEventListener('click', closePanel);
+panelBackdrop?.addEventListener('click', closePanel); // backdrop only visible/active on small screens
+panel?.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let clicks inside the panel bubble to canvas/viewport
