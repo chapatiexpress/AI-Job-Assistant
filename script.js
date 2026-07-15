@@ -551,7 +551,6 @@ const profileFields = {
   autoApply: document.getElementById('profileAutoApply'),
   smartMatch: document.getElementById('profileSmartMatch'),
   emailNotifications: document.getElementById('profileEmailNotifications'),
-  resumeStatus: document.getElementById('resumeStatus'),
   resumeName: document.getElementById('resumeName'),
   resumeInfoText: document.getElementById('resumeInfoText'),
   resumeStatusBadge: document.getElementById('resumeStatusBadge'),
@@ -631,28 +630,49 @@ function updateProfileHeader(){
 
 function updateResumeStatus(){
   const hasResume = !!(profileState.resumeUploaded && profileState.resumeDataUrl);
-  profileFields.resumeStatus.textContent = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
-  profileFields.resumeStatus.classList.toggle('profile-status-good', hasResume);
-  profileFields.resumeStatus.classList.toggle('profile-status-warning', !hasResume);
-  profileFields.resumeStatusBadge.textContent = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
-  profileFields.resumeStatusBadge.classList.toggle('profile-status-good', hasResume);
-  profileFields.resumeStatusBadge.classList.toggle('profile-status-warning', !hasResume);
 
-  profileFields.resumeName.textContent = hasResume ? profileState.resumeFileName || 'Resume Document' : 'No Resume Uploaded';
-  profileFields.resumeInfoText.textContent = hasResume ? `${profileState.resumeFileType || 'PDF'} • ${formatBytes(profileState.resumeFileSize)} • Uploaded ${formatDateTime(profileState.resumeUploadedAt)}` : 'PDF and DOCX supported';
+  if(profileFields.resumeStatusBadge){
+    profileFields.resumeStatusBadge.textContent =
+      hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
 
-  if(hasResume){
-    profileFields.resumeMeta.innerHTML = `
-      <div><strong>File Name:</strong> ${escapeHtml(profileState.resumeFileName || 'resume')}</div>
-      <div><strong>File Type:</strong> ${escapeHtml(profileState.resumeFileType || '')}</div>
-      <div><strong>File Size:</strong> ${escapeHtml(formatBytes(profileState.resumeFileSize))}</div>
-      <div><strong>Upload Date:</strong> ${escapeHtml(formatDateTime(profileState.resumeUploadedAt))}</div>
-    `;
-  } else {
-    profileFields.resumeMeta.textContent = 'No resume selected';
+    profileFields.resumeStatusBadge.classList.toggle(
+      'profile-status-good',
+      hasResume
+    );
+
+    profileFields.resumeStatusBadge.classList.toggle(
+      'profile-status-warning',
+      !hasResume
+    );
+  }
+
+  if(profileFields.resumeName){
+    profileFields.resumeName.textContent =
+      hasResume
+      ? profileState.resumeFileName || 'Resume Document'
+      : 'No Resume Uploaded';
+  }
+
+  if(profileFields.resumeInfoText){
+    profileFields.resumeInfoText.textContent =
+      hasResume
+      ? `${profileState.resumeFileType || 'PDF'} • ${formatBytes(profileState.resumeFileSize)} • Uploaded ${formatDateTime(profileState.resumeUploadedAt)}`
+      : 'PDF and DOCX supported';
+  }
+
+  if(profileFields.resumeMeta){
+    if(hasResume){
+      profileFields.resumeMeta.innerHTML = `
+        <div><strong>File Name:</strong> ${escapeHtml(profileState.resumeFileName || 'resume')}</div>
+        <div><strong>File Type:</strong> ${escapeHtml(profileState.resumeFileType || '')}</div>
+        <div><strong>File Size:</strong> ${escapeHtml(formatBytes(profileState.resumeFileSize))}</div>
+        <div><strong>Upload Date:</strong> ${escapeHtml(formatDateTime(profileState.resumeUploadedAt))}</div>
+      `;
+    }else{
+      profileFields.resumeMeta.textContent = 'No resume selected';
+    }
   }
 }
-
 function renderProfileNodeCard(){
   const node = nodeState['n2'];
   if(!node) return;
