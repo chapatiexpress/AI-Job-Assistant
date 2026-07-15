@@ -504,8 +504,366 @@ const panelName = document.getElementById('panelName');
 const panelDesc = document.getElementById('panelDesc');
 const panelBody = document.getElementById('panelBody');
 const panelFooter = document.getElementById('panelFooter');
+const workflowNavBtn = document.getElementById('workflowNavBtn');
+const profileNavBtn = document.getElementById('profileNavBtn');
+const workflowPage = document.getElementById('app');
+const profilePage = document.getElementById('profilePage');
 
 let selectedNodeId = null;
+
+function setActivePage(page){
+  const isWorkflow = page === 'workflow';
+  workflowPage.classList.toggle('active', isWorkflow);
+  profilePage.classList.toggle('active', !isWorkflow);
+  workflowPage.hidden = !isWorkflow;
+  profilePage.hidden = isWorkflow;
+  workflowNavBtn.classList.toggle('active', isWorkflow);
+  profileNavBtn.classList.toggle('active', !isWorkflow);
+  if(isWorkflow) renderProfileNodeCard();
+}
+workflowNavBtn.addEventListener('click', ()=>setActivePage('workflow'));
+profileNavBtn.addEventListener('click', ()=>setActivePage('profile'));
+setActivePage('workflow');
+
+const PROFILE_STORAGE_KEY = 'ajaProfileData';
+const profileFields = {
+  firstName: document.getElementById('profileFirstName'),
+  lastName: document.getElementById('profileLastName'),
+  email: document.getElementById('profileEmail'),
+  phone: document.getElementById('profilePhone'),
+  location: document.getElementById('profileLocation'),
+  linkedin: document.getElementById('profileLinkedin'),
+  portfolio: document.getElementById('profilePortfolio'),
+  jobTitle: document.getElementById('profileJobTitle'),
+  skillsTags: document.getElementById('profileSkillsTags'),
+  skillsInput: document.getElementById('profileSkillsInput'),
+  experience: document.getElementById('profileExperience'),
+  education: document.getElementById('profileEducation'),
+  certifications: document.getElementById('profileCertifications'),
+  roles: document.getElementById('profileRoles'),
+  preferredLocations: document.getElementById('profilePreferredLocations'),
+  remotePreference: document.getElementById('profileRemotePreference'),
+  aiModel: document.getElementById('profileAiModel'),
+  minMatchScore: document.getElementById('profileMinMatchScore'),
+  minMatchScoreValue: document.getElementById('minMatchScoreValue'),
+  dailyLimit: document.getElementById('profileDailyLimit'),
+  autoCover: document.getElementById('profileAutoCover'),
+  autoApply: document.getElementById('profileAutoApply'),
+  smartMatch: document.getElementById('profileSmartMatch'),
+  emailNotifications: document.getElementById('profileEmailNotifications'),
+  resumeStatus: document.getElementById('resumeStatus'),
+  resumeName: document.getElementById('resumeName'),
+  resumeInfoText: document.getElementById('resumeInfoText'),
+  resumeStatusBadge: document.getElementById('resumeStatusBadge'),
+  resumeMeta: document.getElementById('resumeMeta'),
+  profilePhotoPreview: document.getElementById('profilePhotoPreview'),
+  profileLastUpdated: document.getElementById('profileLastUpdated'),
+  resumeFileInput: document.getElementById('resumeFileInput'),
+  photoFileInput: document.getElementById('photoFileInput')
+};
+
+let profileState = {};
+
+function loadProfileState(){
+  try{
+    const saved = JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY) || '{}');
+    return saved || {};
+  }catch(e){
+    return {};
+  }
+}
+
+function saveProfileState(){
+  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profileState));
+}
+
+function formatBytes(bytes){
+  if(bytes === undefined || bytes === null) return '';
+  const units = ['B','KB','MB','GB'];
+  let value = bytes;
+  let index = 0;
+  while(value >= 1024 && index < units.length - 1){
+    value /= 1024;
+    index++;
+  }
+  return `${value.toFixed(1)} ${units[index]}`;
+}
+
+function formatDateTime(iso){
+  if(!iso) return '—';
+  const date = new Date(iso);
+  if(isNaN(date)) return '—';
+  return date.toLocaleString(undefined, {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function getSkillsFromTags(){
+  return Array.from(profileFields.skillsTags.querySelectorAll('.tag-pill')).map(tag=>tag.dataset.value).filter(Boolean);
+}
+
+function createSkillTag(value){
+  const tag = document.createElement('span');
+  tag.className = 'tag-pill';
+  tag.dataset.value = value;
+  tag.innerHTML = `${escapeHtml(value)}<button type="button" aria-label="Remove skill">×</button>`;
+  tag.querySelector('button').addEventListener('click', ()=>{
+    tag.remove();
+    autoSaveProfileData();
+  });
+  return tag;
+}
+
+function renderSkillTags(){
+  profileFields.skillsTags.innerHTML = '';
+  const skills = Array.isArray(profileState.skills) ? profileState.skills : String(profileState.skills || '').split(',').map(s=>s.trim()).filter(Boolean);
+  skills.forEach(skill=>profileFields.skillsTags.appendChild(createSkillTag(skill)));
+}
+
+function updateProfileWhenChanged(){
+  profileState.lastUpdatedAt = new Date().toISOString();
+  saveProfileState();
+  renderProfileNodeCard();
+  updateProfileHeader();
+}
+
+function updateProfileHeader(){
+  profileFields.profileLastUpdated.textContent = `Last Updated: ${formatDateTime(profileState.lastUpdatedAt)}`;
+}
+
+function updateResumeStatus(){
+  const hasResume = !!(profileState.resumeUploaded && profileState.resumeDataUrl);
+  profileFields.resumeStatus.textContent = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
+  profileFields.resumeStatus.classList.toggle('profile-status-good', hasResume);
+  profileFields.resumeStatus.classList.toggle('profile-status-warning', !hasResume);
+  profileFields.resumeStatusBadge.textContent = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
+  profileFields.resumeStatusBadge.classList.toggle('profile-status-good', hasResume);
+  profileFields.resumeStatusBadge.classList.toggle('profile-status-warning', !hasResume);
+
+  profileFields.resumeName.textContent = hasResume ? profileState.resumeFileName || 'Resume Document' : 'No Resume Uploaded';
+  profileFields.resumeInfoText.textContent = hasResume ? `${profileState.resumeFileType || 'PDF'} • ${formatBytes(profileState.resumeFileSize)} • Uploaded ${formatDateTime(profileState.resumeUploadedAt)}` : 'PDF and DOCX supported';
+
+  if(hasResume){
+    profileFields.resumeMeta.innerHTML = `
+      <div><strong>File Name:</strong> ${escapeHtml(profileState.resumeFileName || 'resume')}</div>
+      <div><strong>File Type:</strong> ${escapeHtml(profileState.resumeFileType || '')}</div>
+      <div><strong>File Size:</strong> ${escapeHtml(formatBytes(profileState.resumeFileSize))}</div>
+      <div><strong>Upload Date:</strong> ${escapeHtml(formatDateTime(profileState.resumeUploadedAt))}</div>
+    `;
+  } else {
+    profileFields.resumeMeta.textContent = 'No resume selected';
+  }
+}
+
+function renderProfileNodeCard(){
+  const node = nodeState['n2'];
+  if(!node) return;
+  const hasResume = !!(profileState.resumeUploaded && profileState.resumeDataUrl);
+  const skills = getSkillsFromTags().join(', ') || 'None';
+  const exp = profileState.experience || 'N/A';
+  const lastUpdated = profileState.lastUpdatedAt ? formatDateTime(profileState.lastUpdatedAt) : '—';
+  const profileStatus = hasResume ? 'Profile Connected' : 'No Resume Uploaded';
+  const resumeStatus = hasResume ? '✔ Resume Uploaded' : '⚠ No Resume Uploaded';
+  const buttonLabel = hasResume ? 'Open Profile' : 'Upload Resume';
+  node.descHtml = `
+    <div class="desc-compact"><strong>${escapeHtml(profileStatus)}</strong></div>
+    <div class="desc-compact">${escapeHtml(resumeStatus)}</div>
+    <div class="desc-compact">Skills: ${escapeHtml(skills)}</div>
+    <div class="desc-compact">Experience: ${escapeHtml(exp)}</div>
+    <div class="desc-compact">Last Updated: ${escapeHtml(lastUpdated)}</div>
+    <button class="open-profile-btn" type="button">${escapeHtml(buttonLabel)}</button>
+  `;
+  const descEl = node.el.querySelector('.desc');
+  if(descEl){ descEl.innerHTML = node.descHtml; }
+}
+
+function populateProfileForm(){
+  profileFields.firstName.value = profileState.firstName || '';
+  profileFields.lastName.value = profileState.lastName || '';
+  profileFields.email.value = profileState.email || '';
+  profileFields.phone.value = profileState.phone || '';
+  profileFields.location.value = profileState.location || '';
+  profileFields.linkedin.value = profileState.linkedin || '';
+  profileFields.portfolio.value = profileState.portfolio || '';
+  profileFields.jobTitle.value = profileState.jobTitle || '';
+  profileFields.experience.value = profileState.experience || '';
+  profileFields.education.value = profileState.education || '';
+  profileFields.certifications.value = profileState.certifications || '';
+  profileFields.roles.value = profileState.roles || '';
+  profileFields.preferredLocations.value = profileState.preferredLocations || '';
+  profileFields.remotePreference.value = profileState.remotePreference || 'Remote Only';
+  profileFields.aiModel.value = profileState.aiModel || 'GPT-4o';
+  profileFields.minMatchScore.value = profileState.minMatchScore || 75;
+  profileFields.minMatchScoreValue.textContent = profileFields.minMatchScore.value;
+  profileFields.dailyLimit.value = profileState.dailyLimit || 30;
+  profileFields.autoCover.checked = profileState.autoCover !== false;
+  profileFields.autoApply.checked = profileState.autoApply !== false;
+  profileFields.smartMatch.checked = profileState.smartMatch !== false;
+  profileFields.emailNotifications.checked = profileState.emailNotifications !== false;
+  profileFields.profilePhotoPreview.textContent = profileState.photoDataUrl ? '' : ((profileState.firstName || 'A').slice(0,1).toUpperCase() + (profileState.lastName || 'U').slice(0,1).toUpperCase());
+  if(profileState.photoDataUrl){ profileFields.profilePhotoPreview.style.backgroundImage = `url(${profileState.photoDataUrl})`; profileFields.profilePhotoPreview.style.backgroundSize = 'cover'; profileFields.profilePhotoPreview.style.color = 'transparent'; }
+  else { profileFields.profilePhotoPreview.style.backgroundImage = ''; profileFields.profilePhotoPreview.style.color = '#2563eb'; }
+  renderSkillTags();
+  updateResumeStatus();
+  updateProfileHeader();
+  renderProfileNodeCard();
+}
+
+function collectProfileState(){
+  return {
+    firstName: profileFields.firstName.value.trim(),
+    lastName: profileFields.lastName.value.trim(),
+    email: profileFields.email.value.trim(),
+    phone: profileFields.phone.value.trim(),
+    location: profileFields.location.value.trim(),
+    linkedin: profileFields.linkedin.value.trim(),
+    portfolio: profileFields.portfolio.value.trim(),
+    jobTitle: profileFields.jobTitle.value.trim(),
+    skills: getSkillsFromTags(),
+    experience: profileFields.experience.value.trim(),
+    education: profileFields.education.value.trim(),
+    certifications: profileFields.certifications.value.trim(),
+    roles: profileFields.roles.value.trim(),
+    preferredLocations: profileFields.preferredLocations.value.trim(),
+    remotePreference: profileFields.remotePreference.value,
+    aiModel: profileFields.aiModel.value,
+    minMatchScore: Number(profileFields.minMatchScore.value),
+    dailyLimit: Number(profileFields.dailyLimit.value),
+    autoCover: profileFields.autoCover.checked,
+    autoApply: profileFields.autoApply.checked,
+    smartMatch: profileFields.smartMatch.checked,
+    emailNotifications: profileFields.emailNotifications.checked,
+    resumeUploaded: !!profileState.resumeUploaded,
+    resumeFileName: profileState.resumeFileName || '',
+    resumeFileType: profileState.resumeFileType || '',
+    resumeFileSize: profileState.resumeFileSize || 0,
+    resumeUploadedAt: profileState.resumeUploadedAt || '',
+    resumeDataUrl: profileState.resumeDataUrl || '',
+    photoDataUrl: profileState.photoDataUrl || profileFields.profilePhotoPreview.style.backgroundImage || '',
+    lastUpdatedAt: profileState.lastUpdatedAt || new Date().toISOString()
+  };
+}
+
+function saveProfileData(){
+  profileState = collectProfileState();
+  profileState.lastUpdatedAt = new Date().toISOString();
+  saveProfileState();
+  updateResumeStatus();
+  updateProfileHeader();
+  renderProfileNodeCard();
+  flashButton(document.querySelector('#saveProfileBtn'), 'Saved ✓');
+}
+
+function autoSaveProfileData(){
+  profileState = collectProfileState();
+  profileState.lastUpdatedAt = new Date().toISOString();
+  saveProfileState();
+  updateResumeStatus();
+  updateProfileHeader();
+  renderProfileNodeCard();
+}
+
+function handleResumeSelection(event){
+  const file = event.target.files && event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    profileState.resumeUploaded = true;
+    profileState.resumeFileName = file.name;
+    profileState.resumeFileType = file.type || 'PDF';
+    profileState.resumeFileSize = file.size;
+    profileState.resumeUploadedAt = new Date().toISOString();
+    profileState.resumeDataUrl = reader.result;
+    profileState.lastUpdatedAt = new Date().toISOString();
+    saveProfileState();
+    updateResumeStatus();
+    updateProfileHeader();
+    renderProfileNodeCard();
+  };
+  reader.readAsDataURL(file);
+}
+
+function handlePhotoSelection(event){
+  const file = event.target.files && event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    profileState.photoDataUrl = reader.result;
+    profileState.lastUpdatedAt = new Date().toISOString();
+    saveProfileState();
+    populateProfileForm();
+  };
+  reader.readAsDataURL(file);
+}
+
+function downloadResume(){
+  if(!profileState.resumeUploaded || !profileState.resumeDataUrl){
+    updateResumeStatus();
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = profileState.resumeDataUrl;
+  link.download = profileState.resumeFileName || 'resume';
+  link.click();
+}
+
+function deleteResume(){
+  profileState.resumeUploaded = false;
+  profileState.resumeFileName = '';
+  profileState.resumeFileType = '';
+  profileState.resumeFileSize = 0;
+  profileState.resumeUploadedAt = '';
+  profileState.resumeDataUrl = '';
+  profileState.lastUpdatedAt = new Date().toISOString();
+  saveProfileState();
+  updateResumeStatus();
+  updateProfileHeader();
+  renderProfileNodeCard();
+}
+
+profileState = loadProfileState();
+populateProfileForm();
+
+profileFields.resumeFileInput.addEventListener('change', handleResumeSelection);
+profileFields.photoFileInput.addEventListener('change', handlePhotoSelection);
+document.getElementById('uploadResumeBtn').addEventListener('click', ()=>profileFields.resumeFileInput.click());
+document.getElementById('replaceResumeBtn').addEventListener('click', ()=>profileFields.resumeFileInput.click());
+document.getElementById('downloadResumeBtn').addEventListener('click', downloadResume);
+document.getElementById('deleteResumeBtn').addEventListener('click', deleteResume);
+document.getElementById('changePhotoBtn').addEventListener('click', ()=>profileFields.photoFileInput.click());
+document.querySelectorAll('#saveProfileBtn,#saveProfileBtnBottom').forEach(btn=>btn.addEventListener('click', saveProfileData));
+
+profileFields.skillsInput.addEventListener('keydown', (e)=>{
+  if(e.key !== 'Enter') return;
+  e.preventDefault();
+  const value = profileFields.skillsInput.value.trim();
+  if(!value) return;
+  profileFields.skillsTags.appendChild(createSkillTag(value));
+  profileFields.skillsInput.value = '';
+  autoSaveProfileData();
+});
+
+['firstName','lastName','email','phone','location','linkedin','portfolio','jobTitle','experience','education','certifications','roles','preferredLocations','remotePreference','aiModel','minMatchScore','dailyLimit','autoCover','autoApply','smartMatch','emailNotifications'].forEach(key=>{
+  const el = profileFields[key];
+  if(!el) return;
+  el.addEventListener('change', autoSaveProfileData);
+  if(el.tagName === 'INPUT') el.addEventListener('input', ()=>{ if(el.type !== 'range') return; profileFields.minMatchScoreValue.textContent = el.value; autoSaveProfileData(); });
+});
+
+function setActivePage(page){
+  const isWorkflow = page === 'workflow';
+  workflowPage.classList.toggle('active', isWorkflow);
+  profilePage.classList.toggle('active', !isWorkflow);
+  workflowPage.hidden = !isWorkflow;
+  profilePage.hidden = isWorkflow;
+  workflowNavBtn.classList.toggle('active', isWorkflow);
+  profileNavBtn.classList.toggle('active', !isWorkflow);
+  if(isWorkflow) renderProfileNodeCard();
+}
+
+document.addEventListener('click', (event) => {
+  const openBtn = event.target.closest('.open-profile-btn');
+  if(!openBtn) return;
+  setActivePage('profile');
+});
 
 function openPanel(){
   panel.classList.add('open');
