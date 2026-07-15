@@ -7,19 +7,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav id="mainNav">
-  <div class="nav-left">
-    <div class="nav-logo">🤖</div>
-    <div class="nav-title">AI Job Assistant</div>
-  </div>
-  <div class="nav-links">
-    <button class="nav-link active" data-page="workflow" type="button">Workflow</button>
-    <button class="nav-link" data-page="profile" type="button">Profile</button>
-  </div>
-  <div class="nav-right" id="navRight">
-    <button id="propsToggleBtn" type="button">Properties</button>
-  </div>
-</nav>
+<button id="propsToggleBtn" type="button">Properties</button>
 
 <div id="propertiesPanel">
   <div class="panel-header">
@@ -48,7 +36,6 @@
 </div>
 <div id="panelBackdrop"></div>
 
-<div id="pageContainer">
 <div id="app">
   <header>
     <h1>AI JOB ASSISTANT</h1>
@@ -86,69 +73,6 @@
     <button id="zout">−</button>
     <button id="zreset" title="Reset view" style="font-size:13px;">⟳</button>
   </div>
-</div>
-
-<div id="profilePage" style="display:none;">
-  <div class="profile-wrap">
-    <div class="profile-header">
-      <h2>My Profile</h2>
-      <p>Manage your personal details, professional background, and resume — used across your automated job search workflow.</p>
-    </div>
-
-    <div class="profile-section">
-      <div class="profile-section-title">Personal Information</div>
-      <div class="profile-grid">
-        <div class="profile-photo-block">
-          <div class="profile-photo-preview" id="profilePhotoPreview">
-            <span id="profilePhotoPlaceholder">👤</span>
-            <img id="profilePhotoImg" alt="Profile photo" style="display:none;">
-          </div>
-          <input type="file" id="profilePhotoInput" accept="image/*" style="display:none;">
-          <button type="button" class="btn-outline" id="profilePhotoBtn">Upload Photo</button>
-        </div>
-        <div class="field"><label>First Name</label><input type="text" id="pf-firstName" class="field-input" placeholder="Jane"></div>
-        <div class="field"><label>Last Name</label><input type="text" id="pf-lastName" class="field-input" placeholder="Doe"></div>
-        <div class="field"><label>Email</label><input type="email" id="pf-email" class="field-input" placeholder="jane@example.com"></div>
-        <div class="field"><label>Phone Number</label><input type="tel" id="pf-phone" class="field-input" placeholder="+1 555 123 4567"></div>
-        <div class="field"><label>Location</label><input type="text" id="pf-location" class="field-input" placeholder="San Francisco, CA"></div>
-        <div class="field"><label>LinkedIn URL</label><input type="url" id="pf-linkedin" class="field-input" placeholder="https://linkedin.com/in/..."></div>
-        <div class="field"><label>Portfolio URL</label><input type="url" id="pf-portfolio" class="field-input" placeholder="https://yourportfolio.com"></div>
-      </div>
-    </div>
-
-    <div class="profile-section">
-      <div class="profile-section-title">Professional Information</div>
-      <div class="profile-grid">
-        <div class="field"><label>Current Job Title</label><input type="text" id="pf-jobTitle" class="field-input" placeholder="Frontend Developer"></div>
-        <div class="field"><label>Years of Experience</label><input type="number" min="0" id="pf-yearsExp" class="field-input" placeholder="3"></div>
-        <div class="field field-span2"><label>Skills</label><div class="tag-input-box" id="tagSkills"></div></div>
-        <div class="field"><label>Education</label><textarea id="pf-education" class="field-input" rows="3" placeholder="B.S. Computer Science, XYZ University, 2020"></textarea></div>
-        <div class="field"><label>Certifications</label><textarea id="pf-certifications" class="field-input" rows="3" placeholder="AWS Certified Developer"></textarea></div>
-        <div class="field field-span2"><label>Preferred Roles</label><div class="tag-input-box" id="tagRoles"></div></div>
-        <div class="field field-span2"><label>Preferred Job Locations</label><div class="tag-input-box" id="tagLocations"></div></div>
-        <div class="field"><label>Remote Preference</label>
-          <select id="pf-remotePref" class="field-input">
-            <option>Remote</option>
-            <option>Hybrid</option>
-            <option>On-site</option>
-            <option>Flexible</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <div class="profile-section">
-      <div class="profile-section-title">Resume</div>
-      <div class="resume-card" id="resumeCard"></div>
-      <input type="file" id="resumeFileInput" accept=".pdf,.doc,.docx" style="display:none;">
-    </div>
-
-    <div class="profile-save-bar">
-      <span class="save-confirm" id="saveConfirmMsg">✔ Profile saved</span>
-      <button type="button" class="btn-save-profile" id="saveProfileBtn">Save Profile</button>
-    </div>
-  </div>
-</div>
 </div>
 
 <script src="script.js"></script>
