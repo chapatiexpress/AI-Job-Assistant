@@ -504,34 +504,48 @@ const panelName = document.getElementById('panelName');
 const panelDesc = document.getElementById('panelDesc');
 const panelBody = document.getElementById('panelBody');
 const panelFooter = document.getElementById('panelFooter');
-const workflowNavBtn = document.getElementById('workflowNavBtn');
-const profileNavBtn = document.getElementById('profileNavBtn');
-const topWorkflowBtn = document.getElementById('topWorkflowBtn');
-const topProfileBtn = document.getElementById('topProfileBtn');
-const topNavPlaceholderLinks = document.querySelectorAll('.topnav-link[data-page="dashboard"], .topnav-link[data-page="applications"], .topnav-link[data-page="analytics"]');
 const workflowPage = document.getElementById('app');
 const profilePage = document.getElementById('profilePage');
+
+/* Registry of every page container the nav can switch to. Keys match each
+   nav button's data-page attribute, so adding a page never requires new
+   listeners — just add it here and give its container a matching data-page
+   trigger. Missing containers are tolerated (guarded with `&&` below) so a
+   page can be registered before its markup exists without breaking anything. */
+const pageContainers = {
+  workflow: workflowPage,
+  profile: profilePage,
+  dashboard: document.getElementById('dashboardPage'),
+  applications: document.getElementById('applicationsPage'),
+  analytics: document.getElementById('analyticsPage'),
+};
 
 let selectedNodeId = null;
 
 function setActivePage(page){
-  const isWorkflow = page === 'workflow';
-  workflowPage.classList.toggle('active', isWorkflow);
-  profilePage.classList.toggle('active', !isWorkflow);
-  workflowPage.hidden = !isWorkflow;
-  profilePage.hidden = isWorkflow;
-  workflowNavBtn.classList.toggle('active', isWorkflow);
-  profileNavBtn.classList.toggle('active', !isWorkflow);
-  if(topWorkflowBtn) topWorkflowBtn.classList.toggle('active', isWorkflow);
-  if(topProfileBtn) topProfileBtn.classList.toggle('active', !isWorkflow);
-  if(isWorkflow) renderProfileNodeCard();
+  if(!pageContainers[page]) page = 'workflow';
+  Object.keys(pageContainers).forEach(key=>{
+    const el = pageContainers[key];
+    if(!el) return;
+    const isActive = key === page;
+    el.classList.toggle('active', isActive);
+    el.hidden = !isActive;
+  });
+  document.querySelectorAll('[data-page]').forEach(btn=>{
+    btn.classList.toggle('active', btn.dataset.page === page);
+  });
+  if(page === 'workflow') renderProfileNodeCard();
 }
-workflowNavBtn.addEventListener('click', ()=>setActivePage('workflow'));
-profileNavBtn.addEventListener('click', ()=>setActivePage('profile'));
-if(topWorkflowBtn) topWorkflowBtn.addEventListener('click', ()=>setActivePage('workflow'));
-if(topProfileBtn) topProfileBtn.addEventListener('click', ()=>setActivePage('profile'));
-/* Dashboard / Applications / Analytics are not built yet — keep them inert but interactive-looking */
-topNavPlaceholderLinks.forEach(btn=>btn.addEventListener('click', ()=>{}));
+
+/* Single delegated listener drives every nav trigger — the top navbar links
+   AND the Properties-panel Workflow/Profile buttons — via their shared
+   data-page attribute. No per-button listeners, no duplicated logic. */
+document.addEventListener('click', (event)=>{
+  const navBtn = event.target.closest('[data-page]');
+  if(navBtn){ setActivePage(navBtn.dataset.page); return; }
+  const openBtn = event.target.closest('.open-profile-btn');
+  if(openBtn){ setActivePage('profile'); }
+});
 /* NOTE: setActivePage('workflow') is invoked further below, after profileState/profileFields
    are initialized — calling it here would throw (profileState is used inside
    renderProfileNodeCard but declared later with `let`), which used to silently abort the rest
@@ -855,11 +869,8 @@ profileFields.skillsInput.addEventListener('keydown', (e)=>{
   if(el.tagName === 'INPUT') el.addEventListener('input', ()=>{ if(el.type !== 'range') return; profileFields.minMatchScoreValue.textContent = el.value; autoSaveProfileData(); });
 });
 
-document.addEventListener('click', (event) => {
-  const openBtn = event.target.closest('.open-profile-btn');
-  if(!openBtn) return;
-  setActivePage('profile');
-});
+/* click-to-open-profile from the workflow "Load Profile and Resume" card is
+   handled by the single delegated listener defined earlier alongside setActivePage. */
 
 function openPanel(){
   panel.classList.add('open');
