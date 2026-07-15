@@ -42,10 +42,11 @@
     flex:1;
     position:relative;
     overflow:hidden;
-    cursor:grab;
+    cursor:default;
     background-image: radial-gradient(circle, #dde1e8 1px, transparent 1px);
     background-size: 22px 22px;
   }
+  #viewport.drag-mode-on{cursor:grab;}
   #viewport.grabbing{cursor:grabbing;}
   #canvas{
     position:absolute;
