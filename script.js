@@ -122,7 +122,12 @@ const connectors = [
 const nodeState = {};
 rects.forEach(r => nodeState[r.id] = {...r, shape:'rect'});
 diamonds.forEach(d => nodeState[d.id] = {...d, shape:'diamond'});
-Object.values(nodeState).forEach(n => { n.origX = n.x; n.origY = n.y; });
+
+/* keep a pristine copy of original titles/descriptions for "Delete" (reset) */
+const originalNodeData = {};
+Object.keys(nodeState).forEach(id=>{
+  originalNodeData[id] = { title: nodeState[id].title, desc: nodeState[id].desc || '' };
+});
 
 const canvas = document.getElementById('canvas');
 const linesSvg = document.getElementById('lines');
@@ -261,9 +266,11 @@ dragModeBtn.onclick = ()=>{
   viewport.classList.toggle('drag-mode-on', dragModeOn);
 };
 
-let dragTarget=null, dragStart=null, nodeStart=null;
+let dragTarget=null, dragStart=null, nodeStart=null, dragMoved=false;
 canvas.addEventListener('pointerdown', (e)=>{
-  if(!dragModeOn) return; // drag mode off — clicking a card does nothing
+  const selEl = e.target.closest('.node,.diamond');
+  if(selEl) dragMoved = false; // reset click/drag tracking for this interaction
+  if(!dragModeOn) return; // drag mode off — clicking a card does nothing (selection handled by 'click' below)
   const el = e.target.closest('.node,.diamond');
   if(!el) return;
   e.stopPropagation();
@@ -275,6 +282,7 @@ canvas.addEventListener('pointerdown', (e)=>{
 });
 canvas.addEventListener('pointermove', (e)=>{
   if(!dragTarget) return;
+  if(Math.abs(e.clientX-dragStart.x) > 4 || Math.abs(e.clientY-dragStart.y) > 4) dragMoved = true;
   const dx = (e.clientX-dragStart.x)/view.scale;
   const dy = (e.clientY-dragStart.y)/view.scale;
   dragTarget.x = nodeStart.x + dx;
@@ -289,6 +297,14 @@ function endDrag(e){
 }
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
+
+/* card selection — click (not drag) opens the Properties Panel */
+canvas.addEventListener('click', (e)=>{
+  const el = e.target.closest('.node,.diamond');
+  if(!el) return;
+  if(dragMoved){ dragMoved = false; return; } // this click was actually the end of a drag
+  selectNode(el.dataset.id);
+});
 
 /* ---------------- pan & zoom viewport ---------------- */
 const view = {scale:0.62, tx:40, ty:20};
@@ -339,18 +355,7 @@ viewport.addEventListener('wheel', (e)=>{
 
 document.getElementById('zin').onclick = ()=>{ zoomBy(1.15); };
 document.getElementById('zout').onclick = ()=>{ zoomBy(0.87); };
-document.getElementById('zreset').onclick = ()=>{
-  // restore every card/diamond to its original position
-  Object.values(nodeState).forEach(n=>{
-    n.x = n.origX;
-    n.y = n.origY;
-    n.el.style.left = n.x+'px';
-    n.el.style.top = n.y+'px';
-  });
-  renderConnectors();
-  // restore the default zoom/pan
-  view.scale=0.62; view.tx=40; view.ty=20; applyView();
-};
+document.getElementById('zreset').onclick = ()=>{ view.scale=0.62; view.tx=40; view.ty=20; applyView(); };
 function zoomBy(f){
   const rect = viewport.getBoundingClientRect();
   const mx = rect.width/2, my = rect.height/2;
@@ -361,3 +366,309 @@ function zoomBy(f){
   view.scale = newScale;
   applyView();
 }
+
+/* =====================================================================
+   PROPERTIES PANEL (left-side, n8n/React Flow style)
+   ===================================================================== */
+const STORAGE_KEY = 'ajaNodeSettings';
+let allSettings = {};
+try{ allSettings = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }catch(e){ allSettings = {}; }
+
+/* per-card-type field definitions (beyond the universal Name/Description/Status/Enable Step) */
+const fieldConfigs = {
+  n1: [ // Trigger
+    {key:'triggerType', label:'Trigger Type', type:'select', options:['Manual','Schedule'], default:'Schedule'},
+    {key:'scanFrequency', label:'Scan Frequency', type:'select', options:['Every 15 minutes','Hourly','Every 6 hours','Daily'], default:'Hourly'},
+  ],
+  n2: [ // Load Profile and Resume
+    {key:'resume', label:'Resume', type:'text', default:'resume.pdf'},
+    {key:'skills', label:'Skills', type:'text', default:'JavaScript, React, Node.js'},
+    {key:'experience', label:'Experience', type:'text', default:'3+ years'},
+  ],
+  n3: [ // Find Jobs
+    {key:'jobBoards', label:'Job Boards', type:'text', default:'LinkedIn, Indeed, Glassdoor'},
+    {key:'keywords', label:'Keywords', type:'text', default:'Frontend Developer'},
+    {key:'location', label:'Location', type:'text', default:'Remote'},
+    {key:'maxResults', label:'Maximum Results', type:'number', default:50},
+  ],
+  n5: [ // AI Match Jobs
+    {key:'matchThreshold', label:'Match Threshold (%)', type:'range', default:70},
+    {key:'aiModel', label:'AI Model', type:'select', options:['Claude 3.5 Sonnet','Claude 3 Opus','Claude 3 Haiku'], default:'Claude 3.5 Sonnet'},
+    {key:'requiredSkills', label:'Required Skills (comma separated)', type:'text', default:'JavaScript, React, Node.js'},
+    {key:'considerExperience', label:'Consider Experience', type:'select', options:['Not Important','Important','Very Important'], default:'Important'},
+    {key:'considerEducation', label:'Consider Education', type:'select', options:['Not Important','Moderate','Important'], default:'Moderate'},
+  ],
+  n8: [ // Filter Job Preferences
+    {key:'salary', label:'Salary', type:'text', default:'$60,000+'},
+    {key:'remote', label:'Remote', type:'select', options:['Any','Remote Only','On-site','Hybrid'], default:'Any'},
+    {key:'experience', label:'Experience', type:'select', options:['Entry','Mid','Senior'], default:'Mid'},
+    {key:'jobType', label:'Job Type', type:'select', options:['Full-time','Part-time','Contract'], default:'Full-time'},
+  ],
+  n10: [ // Check Daily Application Limit
+    {key:'appsPerDay', label:'Applications Per Day', type:'number', default:20},
+  ],
+  n11: [ // Generate or Reuse Cover Letter
+    {key:'generate', label:'Generate', type:'toggle', default:true},
+    {key:'reuseExisting', label:'Reuse Existing', type:'toggle', default:true},
+    {key:'tone', label:'Tone', type:'select', options:['Professional','Friendly','Confident','Formal'], default:'Professional'},
+  ],
+  n12: [ // Prepare Application
+    {key:'resume', label:'Resume', type:'toggle', default:true},
+    {key:'coverLetter', label:'Cover Letter', type:'toggle', default:true},
+    {key:'portfolio', label:'Portfolio', type:'toggle', default:false},
+  ],
+  d13: [ // Manual Review Required?
+    {key:'enableReview', label:'Enable Review', type:'toggle', default:true},
+    {key:'reviewRules', label:'Review Rules', type:'textarea', default:'Flag jobs below 80% match score'},
+  ],
+  n17: [ // Send Notification
+    {key:'email', label:'Email', type:'toggle', default:true},
+    {key:'telegram', label:'Telegram', type:'toggle', default:false},
+    {key:'whatsapp', label:'WhatsApp', type:'toggle', default:false},
+  ],
+};
+
+const sectionTitles = {
+  n1:'Trigger Settings', n2:'Profile Settings', n3:'Search Settings',
+  n5:'AI Matching Settings', n8:'Filter Settings', n10:'Limit Settings',
+  n11:'Cover Letter Settings', n12:'Application Settings',
+  d13:'Review Settings', n17:'Notification Settings',
+};
+function panelSectionTitle(id){ return sectionTitles[id] || 'Settings'; }
+
+function escapeHtml(str){
+  return String(str==null?'':str).replace(/[&<>"']/g, s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+}
+
+function getNodeSettings(id){
+  const saved = allSettings[id] || {};
+  const cfg = fieldConfigs[id] || [];
+  const fields = {};
+  cfg.forEach(f=>{
+    fields[f.key] = (saved.fields && saved.fields[f.key] !== undefined) ? saved.fields[f.key] : f.default;
+  });
+  return {
+    status: saved.status || 'Active',
+    enabled: saved.enabled !== undefined ? saved.enabled : true,
+    name: saved.name !== undefined ? saved.name : originalNodeData[id].title,
+    desc: saved.desc !== undefined ? saved.desc : originalNodeData[id].desc,
+    fields
+  };
+}
+function persistSettings(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(allSettings));
+}
+
+/* apply any previously-saved name/description/enabled state onto the rendered cards (on load) */
+function applyAllSavedVisuals(){
+  Object.keys(nodeState).forEach(id=>{
+    if(!allSettings[id]) return;
+    const s = getNodeSettings(id);
+    const n = nodeState[id];
+    n.title = s.name;
+    n.desc = s.desc;
+    const titleEl = n.el.querySelector('.title');
+    if(titleEl) titleEl.textContent = s.name;
+    const descEl = n.el.querySelector('.desc');
+    if(descEl) descEl.textContent = s.desc;
+    n.el.style.opacity = s.enabled ? '1' : '0.45';
+  });
+}
+applyAllSavedVisuals();
+
+function fieldHTML(f, value){
+  switch(f.type){
+    case 'text':
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><input type="text" class="field-input" data-key="${f.key}" value="${escapeHtml(value)}"></div>`;
+    case 'number':
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><input type="number" class="field-input" data-key="${f.key}" value="${escapeHtml(value)}"></div>`;
+    case 'select':
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><select class="field-input" data-key="${f.key}">${f.options.map(o=>`<option value="${escapeHtml(o)}" ${o===value?'selected':''}>${escapeHtml(o)}</option>`).join('')}</select></div>`;
+    case 'toggle':
+      return `<div class="field field-row"><label>${escapeHtml(f.label)}</label><label class="switch"><input type="checkbox" class="field-input" data-key="${f.key}" ${value?'checked':''}><span class="slider"></span></label></div>`;
+    case 'textarea':
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><textarea class="field-input" data-key="${f.key}" rows="3">${escapeHtml(value)}</textarea></div>`;
+    case 'range':
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><div class="range-row"><input type="range" min="0" max="100" class="field-input range-input" data-key="${f.key}" value="${escapeHtml(value)}"><span class="range-val">${escapeHtml(value)}</span></div></div>`;
+    default:
+      return '';
+  }
+}
+
+const panel = document.getElementById('propertiesPanel');
+const propsToggleBtn = document.getElementById('propsToggleBtn');
+const panelCloseBtn = document.getElementById('panelCloseBtn');
+const panelBackdrop = document.getElementById('panelBackdrop');
+const panelIcon = document.getElementById('panelIcon');
+const panelName = document.getElementById('panelName');
+const panelDesc = document.getElementById('panelDesc');
+const panelBody = document.getElementById('panelBody');
+const panelFooter = document.getElementById('panelFooter');
+
+let selectedNodeId = null;
+
+function openPanel(){
+  panel.classList.add('open');
+  document.body.classList.add('panel-open');
+  propsToggleBtn.textContent = 'Close Properties';
+  propsToggleBtn.classList.add('active');
+}
+function closePanel(){
+  panel.classList.remove('open');
+  document.body.classList.remove('panel-open');
+  propsToggleBtn.textContent = 'Properties';
+  propsToggleBtn.classList.remove('active');
+  if(selectedNodeId && nodeState[selectedNodeId]){
+    nodeState[selectedNodeId].el.classList.remove('selected');
+  }
+  selectedNodeId = null;
+  showEmptyState();
+}
+function showEmptyState(){
+  panelIcon.innerHTML = '';
+  panelIcon.style.background = 'rgba(148,163,184,0.14)';
+  panelName.textContent = 'No card selected';
+  panelDesc.textContent = 'Click a workflow card to view and edit its settings.';
+  panelFooter.style.display = 'none';
+  panelBody.innerHTML = `
+    <div class="panel-empty">
+      <div class="panel-empty-icon">🗂️</div>
+      <p>Select a card on the canvas to configure it here.</p>
+    </div>`;
+}
+
+function selectNode(id){
+  const n = nodeState[id];
+  if(!n) return;
+  if(selectedNodeId && nodeState[selectedNodeId]){
+    nodeState[selectedNodeId].el.classList.remove('selected');
+  }
+  selectedNodeId = id;
+  n.el.classList.add('selected');
+  renderPanelContent(id);
+  openPanel();
+}
+
+function renderPanelContent(id){
+  const n = nodeState[id];
+  const s = getNodeSettings(id);
+  const cfg = fieldConfigs[id] || [];
+
+  panelIcon.style.background = n.tone ? '' : 'rgba(124,58,237,0.10)';
+  panelIcon.style.color = n.color || '#7c3aed';
+  panelIcon.innerHTML = iconSvg(n.icon);
+  panelName.textContent = s.name;
+  panelDesc.textContent = s.desc || 'Configure this workflow step.';
+  panelFooter.style.display = 'flex';
+
+  panelBody.innerHTML = `
+    <div class="panel-section">
+      <div class="section-title">Basic Settings</div>
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="fldName" class="field-input" value="${escapeHtml(s.name)}">
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <textarea id="fldDesc" class="field-input" rows="3">${escapeHtml(s.desc)}</textarea>
+      </div>
+      <div class="field">
+        <label>Status</label>
+        <select id="fldStatus" class="field-input">
+          <option value="Active" ${s.status==='Active'?'selected':''}>Active</option>
+          <option value="Inactive" ${s.status==='Inactive'?'selected':''}>Inactive</option>
+          <option value="Draft" ${s.status==='Draft'?'selected':''}>Draft</option>
+        </select>
+      </div>
+      <div class="field field-row">
+        <label>Enable Step</label>
+        <label class="switch"><input type="checkbox" id="fldEnabled" ${s.enabled?'checked':''}><span class="slider"></span></label>
+      </div>
+    </div>
+    ${cfg.length ? `
+    <div class="panel-section">
+      <div class="section-title">${escapeHtml(panelSectionTitle(id))}</div>
+      ${cfg.map(f=>fieldHTML(f, s.fields[f.key])).join('')}
+    </div>` : ''}
+  `;
+
+  panelBody.querySelectorAll('.range-input').forEach(r=>{
+    r.addEventListener('input', ()=>{ r.nextElementSibling.textContent = r.value; });
+  });
+}
+
+function flashButton(btn, text){
+  const original = btn.textContent;
+  btn.textContent = text;
+  btn.disabled = true;
+  setTimeout(()=>{ btn.textContent = original; btn.disabled = false; }, 1100);
+}
+
+document.getElementById('panelSave').addEventListener('click', ()=>{
+  if(!selectedNodeId) return;
+  const id = selectedNodeId;
+  const n = nodeState[id];
+  const cfg = fieldConfigs[id] || [];
+
+  const nameVal = document.getElementById('fldName').value.trim() || originalNodeData[id].title;
+  const descVal = document.getElementById('fldDesc').value;
+  const statusVal = document.getElementById('fldStatus').value;
+  const enabledVal = document.getElementById('fldEnabled').checked;
+
+  const fields = {};
+  cfg.forEach(f=>{
+    const inputEl = panelBody.querySelector(`[data-key="${f.key}"]`);
+    if(!inputEl) return;
+    if(f.type==='toggle') fields[f.key] = inputEl.checked;
+    else if(f.type==='number' || f.type==='range') fields[f.key] = Number(inputEl.value);
+    else fields[f.key] = inputEl.value;
+  });
+
+  allSettings[id] = { status: statusVal, enabled: enabledVal, name: nameVal, desc: descVal, fields };
+  persistSettings();
+
+  // reflect changes on the live card
+  n.title = nameVal;
+  n.desc = descVal;
+  const titleEl = n.el.querySelector('.title');
+  if(titleEl) titleEl.textContent = nameVal;
+  const descEl = n.el.querySelector('.desc');
+  if(descEl) descEl.textContent = descVal;
+  n.el.style.opacity = enabledVal ? '1' : '0.45';
+
+  panelName.textContent = nameVal;
+  panelDesc.textContent = descVal || 'Configure this workflow step.';
+
+  flashButton(document.getElementById('panelSave'), 'Saved ✓');
+});
+
+document.getElementById('panelDelete').addEventListener('click', ()=>{
+  if(!selectedNodeId) return;
+  const id = selectedNodeId;
+  const n = nodeState[id];
+  delete allSettings[id];
+  persistSettings();
+
+  const orig = originalNodeData[id];
+  n.title = orig.title;
+  n.desc = orig.desc;
+  const titleEl = n.el.querySelector('.title');
+  if(titleEl) titleEl.textContent = orig.title;
+  const descEl = n.el.querySelector('.desc');
+  if(descEl) descEl.textContent = orig.desc;
+  n.el.style.opacity = '1';
+
+  renderPanelContent(id);
+  flashButton(document.getElementById('panelDelete'), 'Reset ✓');
+});
+
+propsToggleBtn.addEventListener('click', ()=>{
+  if(panel.classList.contains('open')) closePanel();
+  else {
+    openPanel();
+    if(!selectedNodeId) showEmptyState();
+  }
+});
+panelCloseBtn.addEventListener('click', closePanel);
+panelBackdrop.addEventListener('click', closePanel); // backdrop only visible/active on small screens
+panel.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let clicks inside the panel bubble to canvas/viewport
