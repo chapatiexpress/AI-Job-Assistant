@@ -12,7 +12,7 @@
     <h1>AI JOB ASSISTANT</h1>
     <p>AI-powered job application automation workflow</p>
   </header>
-  <div id="hint">Drag cards to rearrange · Drag background to pan · Scroll or use buttons to zoom</div>
+  <div id="hint">Click ✋ to enable card dragging · Drag background to pan · Click 🔍 to enable scroll-wheel zoom, or use + / − buttons</div>
   <div id="viewport">
     <div id="canvas">
       <svg id="lines"><defs>
@@ -36,6 +36,10 @@
     </div>
   </div>
   <div id="controls">
+    <button id="dragmode" title="Toggle drag mode">✋</button>
+    <div style="height:6px;"></div>
+    <button id="scrollzoom" title="Toggle scroll-wheel zoom">🔍</button>
+    <div style="height:6px;"></div>
     <button id="zin">+</button>
     <div id="zoomlvl">100%</div>
     <button id="zout">−</button>
