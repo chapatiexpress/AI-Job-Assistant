@@ -262,7 +262,7 @@ dragModeBtn.onclick = ()=>{
 
 let dragTarget=null, dragStart=null, nodeStart=null;
 canvas.addEventListener('pointerdown', (e)=>{
-  if(!dragModeOn) return; // let it fall through to viewport panning
+  if(!dragModeOn) return; // drag mode off — clicking a card does nothing
   const el = e.target.closest('.node,.diamond');
   if(!el) return;
   e.stopPropagation();
@@ -299,7 +299,8 @@ applyView();
 
 let panning=false, panStart=null, viewStart=null;
 viewport.addEventListener('pointerdown', (e)=>{
-  if(dragModeOn && e.target.closest('.node,.diamond')) return;
+  if(!dragModeOn) return; // drag mode off — background is locked too, nothing moves
+  if(e.target.closest('.node,.diamond')) return; // cards never trigger panning — only empty background does
   panning=true;
   viewport.classList.add('grabbing');
   panStart={x:e.clientX,y:e.clientY};
