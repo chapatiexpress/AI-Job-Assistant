@@ -532,7 +532,10 @@ if(topWorkflowBtn) topWorkflowBtn.addEventListener('click', ()=>setActivePage('w
 if(topProfileBtn) topProfileBtn.addEventListener('click', ()=>setActivePage('profile'));
 /* Dashboard / Applications / Analytics are not built yet — keep them inert but interactive-looking */
 topNavPlaceholderLinks.forEach(btn=>btn.addEventListener('click', ()=>{}));
-setActivePage('workflow');
+/* NOTE: setActivePage('workflow') is invoked further below, after profileState/profileFields
+   are initialized — calling it here would throw (profileState is used inside
+   renderProfileNodeCard but declared later with `let`), which used to silently abort the rest
+   of this script, including the Properties panel toggle listener at the bottom of the file. */
 
 const PROFILE_STORAGE_KEY = 'ajaProfileData';
 const profileFields = {
@@ -824,6 +827,7 @@ function deleteResume(){
 
 profileState = loadProfileState();
 populateProfileForm();
+setActivePage('workflow');
 
 profileFields.resumeFileInput.addEventListener('change', handleResumeSelection);
 profileFields.photoFileInput.addEventListener('change', handlePhotoSelection);
