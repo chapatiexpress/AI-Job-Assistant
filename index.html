@@ -4,9 +4,38 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Job Assistant — Automation Flow</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<button id="propsToggleBtn" type="button">Properties</button>
+
+<div id="propertiesPanel">
+  <div class="panel-header">
+    <div class="panel-header-top">
+      <div class="panel-title-group">
+        <div class="panel-icon" id="panelIcon"></div>
+        <div class="panel-title-text">
+          <div class="panel-eyebrow">PROPERTIES PANEL</div>
+          <div class="panel-name" id="panelName">No card selected</div>
+        </div>
+      </div>
+      <button id="panelCloseBtn" class="panel-close" title="Close">&times;</button>
+    </div>
+    <div class="panel-desc" id="panelDesc">Click a workflow card to view and edit its settings.</div>
+  </div>
+  <div class="panel-body" id="panelBody">
+    <div class="panel-empty">
+      <div class="panel-empty-icon">🗂️</div>
+      <p>Select a card on the canvas to configure it here.</p>
+    </div>
+  </div>
+  <div class="panel-footer" id="panelFooter" style="display:none;">
+    <button id="panelDelete" class="btn-panel btn-delete">Delete</button>
+    <button id="panelSave" class="btn-panel btn-save">Save Changes</button>
+  </div>
+</div>
+<div id="panelBackdrop"></div>
+
 <div id="app">
   <header>
     <h1>AI JOB ASSISTANT</h1>
@@ -42,7 +71,7 @@
     <button id="zin">+</button>
     <div id="zoomlvl">100%</div>
     <button id="zout">−</button>
-    <button id="zreset" title="Reset card positions & view" style="font-size:13px;">⟳</button>
+    <button id="zreset" title="Reset view" style="font-size:13px;">⟳</button>
   </div>
 </div>
 
