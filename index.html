@@ -29,6 +29,10 @@
       <p>Select a card on the canvas to configure it here.</p>
     </div>
   </div>
+  <div class="panel-page-nav" id="pageNav">
+    <button id="workflowNavBtn" class="page-nav-btn active" type="button">Workflow</button>
+    <button id="profileNavBtn" class="page-nav-btn" type="button">Profile</button>
+  </div>
   <div class="panel-footer" id="panelFooter" style="display:none;">
     <button id="panelDelete" class="btn-panel btn-delete">Delete</button>
     <button id="panelSave" class="btn-panel btn-save">Save Changes</button>
@@ -36,7 +40,7 @@
 </div>
 <div id="panelBackdrop"></div>
 
-<div id="app">
+<div id="app" class="page-view active">
   <header>
     <h1>AI JOB ASSISTANT</h1>
     <p>AI-powered job application automation workflow</p>
@@ -73,6 +77,179 @@
     <button id="zout">−</button>
     <button id="zreset" title="Reset view" style="font-size:13px;">⟳</button>
   </div>
+</div>
+
+<div id="profilePage" class="page-view" hidden>
+  <div class="profile-shell">
+    <div class="profile-header">
+      <div>
+        <h2>Profile</h2>
+        <p>Manage your profile, resume and job preferences</p>
+      </div>
+      <div class="profile-header-right">
+        <div id="profileLastUpdated" class="profile-last-updated">Last Updated: —</div>
+        <button id="saveProfileBtn" class="profile-save-btn" type="button">Save Profile</button>
+      </div>
+    </div>
+
+    <div class="profile-grid">
+      <section class="profile-card profile-card-personal">
+        <div class="profile-card-title">Personal Information</div>
+        <div class="profile-card-grid">
+          <div class="profile-avatar-panel">
+            <div id="profilePhotoPreview" class="profile-photo">AU</div>
+            <button id="changePhotoBtn" class="btn-panel btn-save profile-action-btn" type="button">Change Photo</button>
+            <div class="profile-photo-hint">Supported formats: JPG, PNG (max 5MB)</div>
+          </div>
+          <div class="profile-fields profile-fields-grid">
+            <div class="field">
+              <label for="profileFirstName">First Name</label>
+              <input id="profileFirstName" class="field-input" type="text" placeholder="Alex">
+            </div>
+            <div class="field">
+              <label for="profileLastName">Last Name</label>
+              <input id="profileLastName" class="field-input" type="text" placeholder="Walker">
+            </div>
+            <div class="field">
+              <label for="profileEmail">Email</label>
+              <input id="profileEmail" class="field-input" type="email" placeholder="alex@example.com">
+            </div>
+            <div class="field">
+              <label for="profilePhone">Phone Number</label>
+              <input id="profilePhone" class="field-input" type="tel" placeholder="+1 555 0100">
+            </div>
+            <div class="field">
+              <label for="profileLocation">Location</label>
+              <input id="profileLocation" class="field-input" type="text" placeholder="Remote / New York">
+            </div>
+            <div class="field">
+              <label for="profileLinkedin">LinkedIn URL</label>
+              <input id="profileLinkedin" class="field-input" type="url" placeholder="https://linkedin.com/in/username">
+            </div>
+            <div class="field">
+              <label for="profilePortfolio">Portfolio URL</label>
+              <input id="profilePortfolio" class="field-input" type="url" placeholder="https://portfolio.example.com">
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="profile-card profile-card-professional">
+        <div class="profile-card-title">Professional Information</div>
+        <div class="profile-fields profile-fields-grid">
+          <div class="field">
+            <label for="profileJobTitle">Current Job Title</label>
+            <input id="profileJobTitle" class="field-input" type="text" placeholder="Frontend Developer">
+          </div>
+          <div class="field">
+            <label for="profileExperience">Years of Experience</label>
+            <input id="profileExperience" class="field-input" type="text" placeholder="3+ years">
+          </div>
+          <div class="field field-full">
+            <label>Skills</label>
+            <div class="tag-input">
+              <div id="profileSkillsTags" class="tag-list"></div>
+              <input id="profileSkillsInput" class="field-input tag-text-input" type="text" placeholder="Add a skill and press Enter">
+            </div>
+          </div>
+          <div class="field">
+            <label for="profileEducation">Education</label>
+            <input id="profileEducation" class="field-input" type="text" placeholder="B.Tech in Computer Science">
+          </div>
+          <div class="field">
+            <label for="profileCertifications">Certifications</label>
+            <input id="profileCertifications" class="field-input" type="text" placeholder="AWS Certified Developer">
+          </div>
+          <div class="field">
+            <label for="profileRoles">Preferred Roles</label>
+            <input id="profileRoles" class="field-input" type="text" placeholder="Frontend Developer, React Developer">
+          </div>
+          <div class="field">
+            <label for="profilePreferredLocations">Preferred Locations</label>
+            <input id="profilePreferredLocations" class="field-input" type="text" placeholder="Remote, London, Berlin">
+          </div>
+          <div class="field">
+            <label for="profileRemotePreference">Remote Preference</label>
+            <select id="profileRemotePreference" class="field-input">
+              <option>Remote Only</option>
+              <option>Hybrid</option>
+              <option>On-site</option>
+              <option>Any</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="profile-card profile-card-resume">
+        <div class="profile-card-title">Resume Management</div>
+        <div class="resume-card-inner">
+          <div class="resume-file-row">
+            <div class="resume-icon">📄</div>
+            <div>
+              <div id="resumeName" class="resume-name">No Resume Uploaded</div>
+              <div id="resumeInfoText" class="resume-info-text">PDF and DOCX supported</div>
+            </div>
+            <div id="resumeStatusBadge" class="resume-status-badge profile-status-warning">⚠ No Resume Uploaded</div>
+          </div>
+          <div id="resumeMeta" class="resume-meta-list">No resume selected</div>
+          <div class="profile-actions">
+            <button id="uploadResumeBtn" class="btn-panel btn-save profile-action-btn" type="button">Upload Resume</button>
+            <button id="replaceResumeBtn" class="btn-panel btn-save profile-action-btn" type="button">Replace Resume</button>
+            <button id="downloadResumeBtn" class="btn-panel btn-delete profile-action-btn" type="button">Download Resume</button>
+            <button id="deleteResumeBtn" class="btn-panel btn-delete profile-action-btn" type="button">Delete Resume</button>
+          </div>
+          <div class="profile-support-text">Supported file types: PDF, DOCX</div>
+        </div>
+      </section>
+
+      <section class="profile-card profile-card-ai">
+        <div class="profile-card-title">AI Preferences</div>
+        <div class="profile-fields profile-fields-grid">
+          <div class="field">
+            <label for="profileAiModel">Preferred AI Model</label>
+            <select id="profileAiModel" class="field-input">
+              <option>GPT-4o</option>
+              <option>Claude 3.5 Sonnet</option>
+              <option>GPT-4 Turbo</option>
+              <option>Claude 3 Opus</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="profileMinMatchScore">Minimum Match Score</label>
+            <input id="profileMinMatchScore" class="field-input" type="range" min="0" max="100" value="75">
+            <div class="range-label"><span id="minMatchScoreValue">75</span>%</div>
+          </div>
+          <div class="field">
+            <label for="profileDailyLimit">Daily Application Limit</label>
+            <input id="profileDailyLimit" class="field-input" type="number" min="1" value="30">
+          </div>
+          <div class="field field-switch">
+            <label>Auto Generate Cover Letter</label>
+            <label class="switch"><input id="profileAutoCover" type="checkbox"><span class="slider"></span></label>
+          </div>
+          <div class="field field-switch">
+            <label>Enable Auto Apply</label>
+            <label class="switch"><input id="profileAutoApply" type="checkbox"><span class="slider"></span></label>
+          </div>
+          <div class="field field-switch">
+            <label>Smart Job Matching</label>
+            <label class="switch"><input id="profileSmartMatch" type="checkbox"><span class="slider"></span></label>
+          </div>
+          <div class="field field-switch">
+            <label>Email Notifications</label>
+            <label class="switch"><input id="profileEmailNotifications" type="checkbox"><span class="slider"></span></label>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="profile-footer">
+      <button id="saveProfileBtnBottom" class="profile-save-btn profile-save-bottom" type="button">Save Profile</button>
+      <div class="profile-save-note">All changes are saved automatically.</div>
+    </div>
+  </div>
+  <input id="resumeFileInput" type="file" accept=".pdf,.doc,.docx" hidden>
+  <input id="photoFileInput" type="file" accept=".jpg,.jpeg,.png" hidden>
 </div>
 
 <script src="script.js"></script>
