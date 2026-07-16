@@ -368,11 +368,279 @@ function zoomBy(f){
 }
 
 /* =====================================================================
-   PROPERTIES PANEL (left-side, n8n/React Flow style)
+   APPLICATION STATE & STORAGE
    ===================================================================== */
-const STORAGE_KEY = 'ajaNodeSettings';
-let allSettings = {};
-try{ allSettings = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }catch(e){ allSettings = {}; }
+const APP_STORAGE_KEY = 'ajaAppState';
+const DEFAULT_APP_STATE = {
+  profile: {
+    firstName:'Alex',
+    lastName:'Walker',
+    email:'alex@example.com',
+    phone:'+1 555 0100',
+    location:'Remote / New York',
+    linkedin:'https://linkedin.com/in/username',
+    portfolio:'https://portfolio.example.com',
+    jobTitle:'Frontend Developer',
+    experience:'3+ years',
+    education:'B.Tech in Computer Science',
+    certifications:'AWS Certified Developer',
+    roles:'Frontend Developer, React Developer',
+    preferredLocations:'Remote, London, Berlin',
+    remotePreference:'Remote Only',
+    aiModel:'GPT-4o',
+    minMatchScore:75,
+    dailyLimit:30,
+    autoCover:true,
+    autoApply:false,
+    smartMatch:true,
+    emailNotifications:true,
+    resumeUploaded:false,
+    resumeFileName:'',
+    resumeFileType:'',
+    resumeFileSize:0,
+    resumeUploadedAt:'',
+    resumeDataUrl:'',
+    photoDataUrl:'',
+    lastUpdatedAt:new Date().toISOString()
+  },
+  workflowSettings:{},
+  notifications:[
+    {id:1,title:'Welcome!',message:'Your AI Job Assistant is ready. Try running the demo workflow.',date:new Date().toISOString(),read:false}
+  ],
+  activity:[
+    {id:1,message:'Application tracker initialized.',date:new Date().toISOString()}
+  ],
+  jobs:[
+    {id:101,jobTitle:'Frontend Developer',company:'Nimbus Cloud',location:'Remote',source:'LinkedIn',matchScore:92,matched:true,foundDate:'2026-07-15',status:'Matched'},
+    {id:102,jobTitle:'React Developer',company:'Brightline Labs',location:'New York, NY',source:'Indeed',matchScore:88,matched:true,foundDate:'2026-07-15',status:'Matched'},
+    {id:103,jobTitle:'UI Engineer',company:'Fenwick Data',location:'Remote',source:'Glassdoor',matchScore:81,matched:false,foundDate:'2026-07-14',status:'Found'},
+    {id:104,jobTitle:'JavaScript Developer',company:'Solace Systems',location:'Chicago, IL',source:'Company Website',matchScore:76,matched:false,foundDate:'2026-07-14',status:'Found'},
+    {id:105,jobTitle:'Web Developer',company:'Harborlight Inc',location:'Austin, TX',source:'LinkedIn',matchScore:70,matched:false,foundDate:'2026-07-13',status:'Found'}
+  ],
+  applications:[
+    {id:1,jobTitle:'Frontend Developer',company:'Nimbus Cloud',location:'Remote',source:'LinkedIn',matchScore:92,date:'2026-07-15',status:'Success',jobDescription:'Build interactive interfaces for hiring workflows.',resumeUsed:'resume.pdf',coverLetter:'Experienced frontend developer with AI-assisted automation experience.',failureReason:'',createdAt:'2026-07-14T08:45:00',updatedAt:'2026-07-15T10:12:00',role:'Frontend Developer'},
+    {id:2,jobTitle:'React Developer',company:'Brightline Labs',location:'New York, NY',source:'Indeed',matchScore:88,date:'2026-07-15',status:'Success',jobDescription:'Expand the platform frontend using React and performance optimizations.',resumeUsed:'resume.pdf',coverLetter:'Skilled in React, Hooks, and responsive UI design.',failureReason:'',createdAt:'2026-07-14T09:20:00',updatedAt:'2026-07-15T11:05:00',role:'React Developer'},
+    {id:3,jobTitle:'UI Engineer',company:'Fenwick Data',location:'Remote',source:'Glassdoor',matchScore:81,date:'2026-07-14',status:'Pending Review',jobDescription:'Design polished user flows and component libraries.',resumeUsed:'resume.pdf',coverLetter:'Focused on usability and clean implementation.',failureReason:'',createdAt:'2026-07-13T17:12:00',updatedAt:'2026-07-14T08:50:00',role:'UI Engineer'},
+    {id:4,jobTitle:'JavaScript Developer',company:'Solace Systems',location:'Chicago, IL',source:'Company Website',matchScore:76,date:'2026-07-14',status:'Temporary Failure',jobDescription:'Implement automation tasks and client-side dashboards.',resumeUsed:'resume.pdf',coverLetter:'Strong JavaScript background with automation workflows.',failureReason:'Application timed out during submission.',createdAt:'2026-07-13T18:30:00',updatedAt:'2026-07-14T13:45:00',role:'JavaScript Developer'},
+    {id:5,jobTitle:'Web Developer',company:'Harborlight Inc',location:'Austin, TX',source:'LinkedIn',matchScore:70,date:'2026-07-13',status:'Permanent Failure',jobDescription:'Maintain web applications and front-end systems.',resumeUsed:'resume.pdf',coverLetter:'Experience with web development and team collaboration.',failureReason:'Position closed before application was delivered.',createdAt:'2026-07-12T15:10:00',updatedAt:'2026-07-13T09:30:00',role:'Web Developer'}
+  ],
+  settings:{nextJobId:106,nextApplicationId:6,pageSize:8,demoMode:true}
+};
+
+function loadAppState(){
+  try{
+    const saved = JSON.parse(localStorage.getItem(APP_STORAGE_KEY) || 'null');
+    if(saved && typeof saved === 'object'){
+      return {
+        profile:{...DEFAULT_APP_STATE.profile, ...(saved.profile||{})},
+        workflowSettings: saved.workflowSettings || {},
+        notifications: Array.isArray(saved.notifications)?saved.notifications:DEFAULT_APP_STATE.notifications.slice(),
+        activity: Array.isArray(saved.activity)?saved.activity:DEFAULT_APP_STATE.activity.slice(),
+        jobs: Array.isArray(saved.jobs)?saved.jobs:DEFAULT_APP_STATE.jobs.slice(),
+        applications: Array.isArray(saved.applications)?saved.applications:DEFAULT_APP_STATE.applications.slice(),
+        settings:{...DEFAULT_APP_STATE.settings, ...(saved.settings||{})}
+      };
+    }
+  }catch(e){}
+  return JSON.parse(JSON.stringify(DEFAULT_APP_STATE));
+}
+
+function saveAppState(){
+  appState.profile = profileState;
+  appState.workflowSettings = allSettings;
+  appState.jobs = jobsData;
+  appState.applications = sampleApplications;
+  localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState));
+}
+
+function addActivity(message){
+  appState.activity.unshift({id:Date.now(),message,date:new Date().toISOString()});
+  if(appState.activity.length>50) appState.activity.length=50;
+  saveAppState();
+}
+
+function addNotification(title,message){
+  appState.notifications.unshift({id:Date.now(),title,message,date:new Date().toISOString(),read:false});
+  if(appState.notifications.length>50) appState.notifications.length=50;
+  saveAppState();
+}
+
+function getUnreadNotificationCount(){
+  return appState.notifications.filter(n=>!n.read).length;
+}
+
+function updateTopNavUser(){
+  const avatar = document.getElementById('topnavAvatar');
+  const username = document.getElementById('topnavUsername');
+  if(avatar) avatar.textContent = ((profileState.firstName||'A').slice(0,1)+ (profileState.lastName||'U').slice(0,1)).toUpperCase();
+  if(username) username.textContent = profileState.firstName ? `${profileState.firstName}${profileState.lastName ? ' ' + profileState.lastName : ''}` : (profileState.email || 'Admin User');
+}
+
+function renderNotifications(){
+  const list = document.getElementById('notificationsList');
+  if(!list) return;
+  list.innerHTML = appState.notifications.length ? appState.notifications.map(n=>`
+    <div class="notification-item ${n.read ? 'read' : 'unread'}" data-notification-id="${n.id}">
+      <div class="notification-item-title">${escapeHtml(n.title)}</div>
+      <div class="notification-item-message">${escapeHtml(n.message)}</div>
+      <div class="notification-item-meta">${new Date(n.date).toLocaleString()}</div>
+    </div>
+  `).join('') : '<div class="notification-empty">No notifications yet.</div>';
+  updateNotificationBadge();
+}
+
+function updateNotificationBadge(){
+  const badge = document.getElementById('notificationCount');
+  if(!badge) return;
+  const count = appState.notifications.filter(n=>!n.read).length;
+  badge.textContent = count;
+  badge.classList.toggle('hidden', count === 0);
+}
+
+function toggleNotificationsPanel(forceOpen){
+  const panel = document.getElementById('notificationPanel');
+  const bell = document.getElementById('notificationBellBtn');
+  if(!panel || !bell) return;
+  const isOpen = forceOpen !== undefined ? forceOpen : panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !isOpen);
+  bell.classList.toggle('active', isOpen);
+  if(isOpen){ renderNotifications(); }
+}
+
+function markNotificationRead(id){
+  const note = appState.notifications.find(n=>n.id===id);
+  if(note && !note.read){
+    note.read = true;
+    saveAppState();
+    renderNotifications();
+  }
+}
+
+function markAllNotificationsRead(){
+  appState.notifications.forEach(n=>n.read=true);
+  saveAppState();
+  renderNotifications();
+}
+
+function clearNotifications(){
+  appState.notifications = [];
+  saveAppState();
+  renderNotifications();
+  showToast('Notifications cleared.');
+}
+
+function openMobileMenu(){
+  const menu = document.getElementById('mobileNavMenu');
+  const backdrop = document.getElementById('mobileNavBackdrop');
+  if(!menu || !backdrop) return;
+  menu.classList.remove('hidden');
+  backdrop.classList.remove('hidden');
+}
+
+function closeMobileMenu(){
+  const menu = document.getElementById('mobileNavMenu');
+  const backdrop = document.getElementById('mobileNavBackdrop');
+  if(!menu || !backdrop) return;
+  menu.classList.add('hidden');
+  backdrop.classList.add('hidden');
+}
+
+function openModal(title, html){
+  const modal = document.getElementById('detailModal');
+  const backdrop = document.getElementById('modalBackdrop');
+  const titleEl = document.getElementById('modalTitle');
+  const contentEl = document.getElementById('modalContent');
+  if(titleEl) titleEl.textContent = title;
+  if(contentEl) contentEl.innerHTML = html;
+  modal && modal.classList.remove('hidden');
+  backdrop && backdrop.classList.remove('hidden');
+}
+
+function closeModal(){
+  const modal = document.getElementById('detailModal');
+  const backdrop = document.getElementById('modalBackdrop');
+  modal && modal.classList.add('hidden');
+  backdrop && backdrop.classList.add('hidden');
+}
+
+let toastTimer = null;
+function showToast(message, type='info'){
+  const toast = document.getElementById('toast');
+  if(!toast) return;
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  toast.classList.remove('hidden');
+  if(toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{ toast.classList.add('hidden'); }, 4200);
+}
+
+function addDemoJob(){
+  const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
+  const newApplication = {
+    id: nextId,
+    jobTitle: 'AI Automation Engineer',
+    company: 'Aurora Systems',
+    location: 'Remote',
+    source: 'Indeed',
+    matchScore: 85,
+    date: new Date().toISOString().slice(0,10),
+    status: 'Pending Review'
+  };
+  sampleApplications.unshift(newApplication);
+  appState.settings.nextApplicationId = nextId + 1;
+  saveAppState();
+  renderApplicationsTable();
+  renderDashboard();
+  renderAnalytics();
+  addActivity('Demo job added to applications.');
+  addNotification('Demo Job Added', 'A new example application was added.');
+  showToast('Demo job added.');
+}
+
+function runDemoScan(){
+  const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
+  const newApplication = {
+    id: nextId,
+    jobTitle: 'AI Job Matching Specialist',
+    company: 'Nova Launch',
+    location: 'New York, NY',
+    source: 'LinkedIn',
+    matchScore: 91,
+    date: new Date().toISOString().slice(0,10),
+    status: 'Success'
+  };
+  sampleApplications.unshift(newApplication);
+  appState.settings.nextApplicationId = nextId + 1;
+  saveAppState();
+  renderApplicationsTable();
+  renderDashboard();
+  renderAnalytics();
+  addActivity('Demo scan completed.');
+  addNotification('Demo Scan Complete', 'A new matching application was added.');
+  showToast('Demo scan completed.');
+}
+
+function loadMoreApplications(){
+  const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
+  const extra = [
+    {id: nextId, jobTitle:'Full Stack Developer', company:'Violet Works', location:'Austin, TX', source:'Glassdoor', matchScore:78, date:'2026-07-06', status:'Temporary Failure'},
+    {id: nextId+1, jobTitle:'Product Designer', company:'Crescent Labs', location:'Remote', source:'LinkedIn', matchScore:82, date:'2026-07-05', status:'Pending Review'},
+  ];
+  sampleApplications.push(...extra);
+  appState.settings.nextApplicationId = nextId + extra.length;
+  saveAppState();
+  renderApplicationsTable();
+  renderDashboard();
+  renderAnalytics();
+  addActivity('Loaded more application history.');
+  showToast('More applications loaded.');
+}
+
+let appState = loadAppState();
+let allSettings = appState.workflowSettings || {};
+let profileState = appState.profile || {};
+let sampleApplications = appState.applications || [];
+let jobsData = appState.jobs || [];
 
 /* per-card-type field definitions (beyond the universal Name/Description/Status/Enable Step) */
 const fieldConfigs = {
@@ -456,7 +724,7 @@ function getNodeSettings(id){
   };
 }
 function persistSettings(){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(allSettings));
+  saveAppState();
 }
 
 /* apply any previously-saved name/description/enabled state onto the rendered cards (on load) */
@@ -531,9 +799,10 @@ function setActivePage(page){
     el.classList.toggle('active', isActive);
     el.hidden = !isActive;
   });
-  document.querySelectorAll('.topnav-link, .page-nav-btn').forEach(btn=>{
+  document.querySelectorAll('.topnav-link, .page-nav-btn, .mobile-nav-link').forEach(btn=>{
     btn.classList.toggle('active', btn.dataset.page === page);
   });
+  toggleNotificationsPanel(false);
   /* Each page refreshes its own content when it becomes active. Every
      render function below is a plain hoisted function declaration and
      guards on its target elements existing, so calling them here is safe
@@ -549,9 +818,26 @@ function setActivePage(page){
    data-page attribute. No per-button listeners, no duplicated logic. */
 document.addEventListener('click', (event)=>{
   const navBtn = event.target.closest('[data-page]');
-  if(navBtn){ setActivePage(navBtn.dataset.page); return; }
+  if(navBtn){ setActivePage(navBtn.dataset.page); closeMobileMenu(); return; }
+  const actionBtn = event.target.closest('[data-action]');
+  if(actionBtn){
+    const action = actionBtn.dataset.action;
+    if(action === 'run-demo-scan') runDemoScan();
+    if(action === 'add-demo-job') addDemoJob();
+    return;
+  }
   const openBtn = event.target.closest('.open-profile-btn');
-  if(openBtn){ setActivePage('profile'); }
+  if(openBtn){ setActivePage('profile'); return; }
+  const notificationToggle = event.target.closest('#notificationBellBtn');
+  if(notificationToggle){ toggleNotificationsPanel(); return; }
+  const mobileOpen = event.target.closest('#mobileMenuBtn');
+  if(mobileOpen){ openMobileMenu(); return; }
+  const mobileLink = event.target.closest('.mobile-nav-link');
+  if(mobileLink){ setActivePage(mobileLink.dataset.page); closeMobileMenu(); return; }
+  const mobileClose = event.target.closest('#mobileNavCloseBtn');
+  if(mobileClose){ closeMobileMenu(); return; }
+  const notificationItem = event.target.closest('.notification-item');
+  if(notificationItem){ const id = Number(notificationItem.dataset.notificationId); if(id) markNotificationRead(id); return; }
 });
 /* NOTE: setActivePage('workflow') is invoked further below, after profileState/profileFields
    are initialized — calling it here would throw (profileState is used inside
@@ -597,16 +883,11 @@ const profileFields = {
 let profileState = {};
 
 function loadProfileState(){
-  try{
-    const saved = JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY) || '{}');
-    return saved || {};
-  }catch(e){
-    return {};
-  }
+  return appState.profile || {};
 }
 
 function saveProfileState(){
-  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profileState));
+  saveAppState();
 }
 
 function formatBytes(bytes){
@@ -775,6 +1056,7 @@ function saveProfileData(){
   saveProfileState();
   updateResumeStatus();
   updateProfileHeader();
+  updateTopNavUser();
   renderProfileNodeCard();
   flashButton(document.querySelector('#saveProfileBtn'), 'Saved ✓');
 }
@@ -785,6 +1067,7 @@ function autoSaveProfileData(){
   saveProfileState();
   updateResumeStatus();
   updateProfileHeader();
+  updateTopNavUser();
   renderProfileNodeCard();
 }
 
@@ -1053,21 +1336,6 @@ panel.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let c
    it from a backend response) and every stat/table/chart below recalculates
    automatically — nothing else needs to change.
    ===================================================================== */
-const sampleApplications = [
-  {id:1,  jobTitle:'Frontend Developer',        company:'Nimbus Cloud',        matchScore:92, date:'2026-07-15', status:'Success',            source:'LinkedIn'},
-  {id:2,  jobTitle:'React Developer',           company:'Brightline Labs',     matchScore:88, date:'2026-07-15', status:'Success',            source:'Indeed'},
-  {id:3,  jobTitle:'UI Engineer',                company:'Fenwick Data',        matchScore:81, date:'2026-07-14', status:'Pending Review',     source:'Glassdoor'},
-  {id:4,  jobTitle:'JavaScript Developer',      company:'Solace Systems',      matchScore:76, date:'2026-07-14', status:'Temporary Failure',  source:'Company Website'},
-  {id:5,  jobTitle:'Web Developer',              company:'Harborlight Inc',     matchScore:70, date:'2026-07-13', status:'Permanent Failure',  source:'LinkedIn'},
-  {id:6,  jobTitle:'Frontend Engineer',          company:'Kestrel Softworks',   matchScore:95, date:'2026-07-13', status:'Success',            source:'Indeed'},
-  {id:7,  jobTitle:'React Native Developer',    company:'Orbital Apps',        matchScore:84, date:'2026-07-12', status:'Success',            source:'LinkedIn'},
-  {id:8,  jobTitle:'Product Engineer',            company:'Cedarline Co',        matchScore:79, date:'2026-07-11', status:'Pending Review',     source:'Glassdoor'},
-  {id:9,  jobTitle:'Frontend Developer',        company:'Millbrook Tech',      matchScore:73, date:'2026-07-10', status:'Temporary Failure',  source:'Indeed'},
-  {id:10, jobTitle:'UI/UX Developer',            company:'Stonegate Digital',   matchScore:90, date:'2026-07-09', status:'Success',            source:'Company Website'},
-  {id:11, jobTitle:'Junior Frontend Developer', company:'Alderway Studio',     matchScore:68, date:'2026-07-08', status:'Permanent Failure',  source:'LinkedIn'},
-  {id:12, jobTitle:'Web App Developer',          company:'Northfield Labs',     matchScore:86, date:'2026-07-07', status:'Success',            source:'Indeed'},
-];
-
 const STATUS_META = {
   'Success':            {cls:'status-success',  icon:'✔'},
   'Pending Review':     {cls:'status-pending',  icon:'⏳'},
@@ -1179,12 +1447,25 @@ function renderApplicationsTable(){
 
   const query = (searchEl && searchEl.value || '').trim().toLowerCase();
   const statusFilter = (filterEl && filterEl.value) || 'All';
+  const sourceFilter = (appsSourceFilterEl && appsSourceFilterEl.value) || 'All';
+  const sortBy = (appsSortByEl && appsSortByEl.value) || 'date';
+  const sortOrder = (appsSortOrderEl && appsSortOrderEl.value) || 'desc';
 
   const filtered = sampleApplications.filter(a=>{
     const matchesQuery = !query || a.jobTitle.toLowerCase().includes(query) || a.company.toLowerCase().includes(query);
     const matchesStatus = statusFilter === 'All' || a.status === statusFilter;
-    return matchesQuery && matchesStatus;
-  }).sort((a,b)=> new Date(b.date)-new Date(a.date));
+    const matchesSource = sourceFilter === 'All' || a.source === sourceFilter;
+    return matchesQuery && matchesStatus && matchesSource;
+  }).sort((a,b)=>{
+    let left = a[sortBy];
+    let right = b[sortBy];
+    if(sortBy === 'date'){
+      left = new Date(left); right = new Date(right);
+    }
+    if(left < right) return sortOrder === 'asc' ? -1 : 1;
+    if(left > right) return sortOrder === 'asc' ? 1 : -1;
+    return 0;
+  });
 
   tbody.innerHTML = filtered.map(a=>{
     const meta = STATUS_META[a.status] || {cls:'',icon:''};
@@ -1239,8 +1520,16 @@ function renderAnalytics(){
 /* live search + status filter for the Applications table */
 const appsSearchInputEl = document.getElementById('appsSearchInput');
 const appsStatusFilterEl = document.getElementById('appsStatusFilter');
+const appsSourceFilterEl = document.getElementById('appsSourceFilter');
+const appsSortByEl = document.getElementById('appsSortBy');
+const appsSortOrderEl = document.getElementById('appsSortOrder');
+const appsLoadMoreBtnEl = document.getElementById('appsLoadMoreBtn');
 if(appsSearchInputEl) appsSearchInputEl.addEventListener('input', renderApplicationsTable);
 if(appsStatusFilterEl) appsStatusFilterEl.addEventListener('change', renderApplicationsTable);
+if(appsSourceFilterEl) appsSourceFilterEl.addEventListener('change', renderApplicationsTable);
+if(appsSortByEl) appsSortByEl.addEventListener('change', renderApplicationsTable);
+if(appsSortOrderEl) appsSortOrderEl.addEventListener('change', renderApplicationsTable);
+if(appsLoadMoreBtnEl) appsLoadMoreBtnEl.addEventListener('click', loadMoreApplications);
 
 /* single delegated listener for the "View" action button in the applications table */
 const appsTableBodyEl = document.getElementById('appsTableBody');
@@ -1251,12 +1540,41 @@ if(appsTableBodyEl){
     const id = Number(btn.dataset.appId);
     const app = sampleApplications.find(a=>a.id===id);
     if(!app) return;
-    alert(`${app.jobTitle} at ${app.company}\nMatch Score: ${app.matchScore}%\nStatus: ${app.status}\nDate: ${formatSampleDate(app.date)}\nSource: ${app.source}`);
+    openModal(`${app.jobTitle} at ${app.company}`, `
+      <p><strong>Match Score:</strong> ${app.matchScore}%</p>
+      <p><strong>Status:</strong> ${escapeHtml(app.status)}</p>
+      <p><strong>Date:</strong> ${escapeHtml(formatSampleDate(app.date))}</p>
+      <p><strong>Source:</strong> ${escapeHtml(app.source)}</p>
+      <p><strong>Location:</strong> ${escapeHtml(app.location || 'Remote')}</p>
+    `);
   });
 }
+
+if(document.getElementById('markAllReadBtn')) document.getElementById('markAllReadBtn').addEventListener('click', markAllNotificationsRead);
+if(document.getElementById('clearNotificationsBtn')) document.getElementById('clearNotificationsBtn').addEventListener('click', clearNotifications);
+if(document.getElementById('mobileMenuBtn')) document.getElementById('mobileMenuBtn').addEventListener('click', openMobileMenu);
+if(document.getElementById('mobileNavCloseBtn')) document.getElementById('mobileNavCloseBtn').addEventListener('click', closeMobileMenu);
+if(document.getElementById('mobileNavBackdrop')) document.getElementById('mobileNavBackdrop').addEventListener('click', closeMobileMenu);
+const modalCloseBtn = document.getElementById('modalCloseBtn');
+if(modalCloseBtn) modalCloseBtn.addEventListener('click', closeModal);
+const modalCloseBtn2 = document.getElementById('modalCloseBtn2');
+if(modalCloseBtn2) modalCloseBtn2.addEventListener('click', closeModal);
+const modalBackdrop = document.getElementById('modalBackdrop');
+if(modalBackdrop) modalBackdrop.addEventListener('click', closeModal);
+
+window.addEventListener('keydown', (event)=>{
+  if(event.key === 'Escape'){
+    closeModal();
+    closeMobileMenu();
+    toggleNotificationsPanel(false);
+  }
+});
 
 /* initial render so Dashboard/Applications/Analytics have content the
    first time they're opened, even before their nav button is clicked */
 renderDashboard();
 renderApplicationsTable();
 renderAnalytics();
+renderNotifications();
+updateNotificationBadge();
+updateTopNavUser();
