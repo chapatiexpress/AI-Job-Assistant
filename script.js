@@ -1049,16 +1049,19 @@ async function runWorkflow(){
   const matchedJobs = scoredJobs.filter(job=>job.matched);
   if(!matchedJobs.length){
     await executeWorkflowNode(null, 'd7', 'skipped', 'skipped');
-    markWorkflowNodesSkipped(['n8','n9','n10','n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','n18','pending','skip']);
+    markWorkflowNodesSkipped(['n8','n9','n10','n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','pending','skip']);
+    await executeWorkflowNode(null, 'n19', 'pending', 'pending');
+    scanWaiting = true;
     const jobsFound = scoredJobs.length;
     const jobsMatched = 0;
     const jobsSkipped = scoredJobs.length;
-    const applicationsSent = 0;
+    addActivity('No jobs matched the threshold. Waiting for the next scan.');
     addNotification('No Jobs Matched', 'No jobs met the configured minimum match score.');
-    addNotification('Workflow Completed', `${jobsFound} jobs were found, ${jobsMatched} matched the minimum score, and ${jobsSkipped} were skipped. No applications were sent.`);
+    addNotification('Waiting for Next Scan', 'The workflow is paused and waiting for the next scan trigger.');
     renderNotifications();
     if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-    showToast('Workflow completed. No jobs matched the threshold.', 'info');
+    showToast('Workflow paused until next scan.', 'info');
+    workflowRunning = false;
     return;
   }
 
@@ -1217,8 +1220,12 @@ async function runWorkflow(){
     }
   }
 
-  if(!waitingForNextScan && completedJobs >= matchedJobs.length){
-    await executeWorkflowNode(null, 'n19', 'completed', 'completed');
+  if(completedJobs >= matchedJobs.length && !waitingForNextScan){
+    await executeWorkflowNode(null, 'n19', 'pending', 'pending');
+    addActivity('All current jobs processed. Waiting for the next scan.');
+    addNotification('Waiting for Next Scan', 'All current jobs are processed. The workflow is awaiting the next scan.');
+    waitingForNextScan = true;
+    scanWaiting = true;
   }
 
   renderNotifications();
