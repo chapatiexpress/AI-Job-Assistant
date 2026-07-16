@@ -1032,9 +1032,7 @@ async function runWorkflow(){
   const matchedJobs = scoredJobs.filter(job=>job.matched);
   if(!matchedJobs.length){
     await executeWorkflowNode(null, 'd7', 'skipped', 'skipped');
-    markWorkflowNodesSkipped(['n8','n9','n10','n11','n12','d13','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','n18','pending','skip']);
-    await executeWorkflowNode(null, 'n19', 'completed', 'completed');
-    workflowRunning = false;
+      markWorkflowNodesSkipped(['n8','n9','n10','n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','n18','pending','skip']);
     if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
     showToast('Workflow completed. No jobs matched the threshold.', 'info');
     return;
@@ -1081,6 +1079,7 @@ async function runWorkflow(){
       job.workflowStatus = 'Skipped';
       job.workflowFinalStatus = 'skipped';
       persistApplication(job, 'Skipped', {skipReason:isBlacklisted ? 'Blacklisted company' : 'Already applied'});
+      markWorkflowNodesSkipped(['d15','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
       await executeWorkflowNode(job, 'skip', 'skipped', 'completed');
       await executeWorkflowNode(job, 'n18', 'completed', 'completed');
       completedJobs += 1;
@@ -1089,7 +1088,7 @@ async function runWorkflow(){
 
     await executeWorkflowNode(job, 'n10', 'checking_limits', 'completed');
     if(applicationsCount >= dailyLimit){
-      markWorkflowNodesSkipped(['n11','n12','d13','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','pending','skip']);
+      markWorkflowNodesSkipped(['n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','pending','skip']);
       await executeWorkflowNode(job, 'n19', 'completed', 'completed');
       break;
     }
