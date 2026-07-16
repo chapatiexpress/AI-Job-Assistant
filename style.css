@@ -20,9 +20,11 @@
   html,body{margin:0;padding:0;height:100%;background:var(--bg);font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;overflow:hidden;}
   #mainWrap{position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;}
   #pageArea{position:relative;flex:1;min-height:0;}
-  #app{position:relative;width:100%;height:100%;display:flex;flex-direction:column;}
+  #app{position:relative;width:100%;height:100%;flex-direction:column;}
   .page-view{display:none;}
-  .page-view.active{display:flex;}
+  .page-view.active{display:block;}
+  #app.page-view.active{display:flex;}
+  [hidden]{display:none !important;}
   #viewport{
     flex:1;
     position:relative;
