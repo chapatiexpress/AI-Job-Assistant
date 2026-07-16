@@ -534,7 +534,14 @@ function setActivePage(page){
   document.querySelectorAll('[data-page]').forEach(btn=>{
     btn.classList.toggle('active', btn.dataset.page === page);
   });
+  /* Each page refreshes its own content when it becomes active. Every
+     render function below is a plain hoisted function declaration and
+     guards on its target elements existing, so calling them here is safe
+     regardless of definition order in this file. */
   if(page === 'workflow') renderProfileNodeCard();
+  if(page === 'dashboard') renderDashboard();
+  if(page === 'applications') renderApplicationsTable();
+  if(page === 'analytics') renderAnalytics();
 }
 
 /* Single delegated listener drives every nav trigger — the top navbar links
@@ -1039,3 +1046,217 @@ propsToggleBtn.addEventListener('click', ()=>{
 panelCloseBtn.addEventListener('click', closePanel);
 panelBackdrop.addEventListener('click', closePanel); // backdrop only visible/active on small screens
 panel.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let clicks inside the panel bubble to canvas/viewport
+
+/* =====================================================================
+   DASHBOARD / APPLICATIONS / ANALYTICS
+   One sample data array powers all three pages. Swap this array (or feed
+   it from a backend response) and every stat/table/chart below recalculates
+   automatically — nothing else needs to change.
+   ===================================================================== */
+const sampleApplications = [
+  {id:1,  jobTitle:'Frontend Developer',        company:'Nimbus Cloud',        matchScore:92, date:'2026-07-15', status:'Success',            source:'LinkedIn'},
+  {id:2,  jobTitle:'React Developer',           company:'Brightline Labs',     matchScore:88, date:'2026-07-15', status:'Success',            source:'Indeed'},
+  {id:3,  jobTitle:'UI Engineer',                company:'Fenwick Data',        matchScore:81, date:'2026-07-14', status:'Pending Review',     source:'Glassdoor'},
+  {id:4,  jobTitle:'JavaScript Developer',      company:'Solace Systems',      matchScore:76, date:'2026-07-14', status:'Temporary Failure',  source:'Company Website'},
+  {id:5,  jobTitle:'Web Developer',              company:'Harborlight Inc',     matchScore:70, date:'2026-07-13', status:'Permanent Failure',  source:'LinkedIn'},
+  {id:6,  jobTitle:'Frontend Engineer',          company:'Kestrel Softworks',   matchScore:95, date:'2026-07-13', status:'Success',            source:'Indeed'},
+  {id:7,  jobTitle:'React Native Developer',    company:'Orbital Apps',        matchScore:84, date:'2026-07-12', status:'Success',            source:'LinkedIn'},
+  {id:8,  jobTitle:'Product Engineer',            company:'Cedarline Co',        matchScore:79, date:'2026-07-11', status:'Pending Review',     source:'Glassdoor'},
+  {id:9,  jobTitle:'Frontend Developer',        company:'Millbrook Tech',      matchScore:73, date:'2026-07-10', status:'Temporary Failure',  source:'Indeed'},
+  {id:10, jobTitle:'UI/UX Developer',            company:'Stonegate Digital',   matchScore:90, date:'2026-07-09', status:'Success',            source:'Company Website'},
+  {id:11, jobTitle:'Junior Frontend Developer', company:'Alderway Studio',     matchScore:68, date:'2026-07-08', status:'Permanent Failure',  source:'LinkedIn'},
+  {id:12, jobTitle:'Web App Developer',          company:'Northfield Labs',     matchScore:86, date:'2026-07-07', status:'Success',            source:'Indeed'},
+];
+
+const STATUS_META = {
+  'Success':            {cls:'status-success',  icon:'✔'},
+  'Pending Review':     {cls:'status-pending',  icon:'⏳'},
+  'Temporary Failure':  {cls:'status-tempfail',  icon:'⏱'},
+  'Permanent Failure':  {cls:'status-permfail',  icon:'✕'},
+};
+const STATUS_ORDER = ['Success','Pending Review','Temporary Failure','Permanent Failure'];
+
+function formatSampleDate(dateStr){
+  const d = new Date(dateStr+'T00:00:00');
+  if(isNaN(d)) return dateStr;
+  return d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+}
+
+function daysSince(dateStr){
+  const d = new Date(dateStr+'T00:00:00');
+  return (Date.now() - d.getTime()) / (1000*60*60*24);
+}
+
+function computeDashboardStats(){
+  return {
+    totalJobsFound: 248,   // upstream metric from job search, sample value
+    jobsMatched: 86,       // upstream metric from AI matching stage, sample value
+    applicationsSent: sampleApplications.length,
+    pendingReviews: sampleApplications.filter(a=>a.status==='Pending Review').length,
+    successful: sampleApplications.filter(a=>a.status==='Success').length,
+    failed: sampleApplications.filter(a=>a.status==='Temporary Failure' || a.status==='Permanent Failure').length,
+  };
+}
+
+function buildStatusBarsHtml(){
+  const total = sampleApplications.length || 1;
+  return STATUS_ORDER.map(status=>{
+    const count = sampleApplications.filter(a=>a.status===status).length;
+    const pct = Math.round((count/total)*100);
+    const meta = STATUS_META[status];
+    return `<div class="bar-row">
+      <div class="bar-label">${escapeHtml(status)}</div>
+      <div class="bar-track"><div class="bar-fill ${meta.cls}" style="width:${pct}%"></div></div>
+      <div class="bar-value">${count} (${pct}%)</div>
+    </div>`;
+  }).join('');
+}
+
+function buildSourceBarsHtml(){
+  const total = sampleApplications.length || 1;
+  const sources = [...new Set(sampleApplications.map(a=>a.source))];
+  return sources.map(source=>{
+    const count = sampleApplications.filter(a=>a.source===source).length;
+    const pct = Math.round((count/total)*100);
+    return `<div class="bar-row">
+      <div class="bar-label">${escapeHtml(source)}</div>
+      <div class="bar-track"><div class="bar-fill bar-fill-neutral" style="width:${pct}%"></div></div>
+      <div class="bar-value">${count} (${pct}%)</div>
+    </div>`;
+  }).join('');
+}
+
+function renderDashboard(){
+  const grid = document.getElementById('dashStatsGrid');
+  if(!grid) return;
+  const stats = computeDashboardStats();
+  const cards = [
+    {label:'Total Jobs Found',           value:stats.totalJobsFound, icon:'📄', color:'#334155'},
+    {label:'Jobs Matched',               value:stats.jobsMatched,    icon:'🎯', color:'#7c3aed'},
+    {label:'Applications Sent',          value:stats.applicationsSent, icon:'📤', color:'#2563eb'},
+    {label:'Pending Reviews',            value:stats.pendingReviews, icon:'⏳', color:'#ea580c'},
+    {label:'Successful Applications',    value:stats.successful,     icon:'✅', color:'#16a34a'},
+    {label:'Failed Applications',        value:stats.failed,         icon:'❌', color:'#dc2626'},
+  ];
+  grid.innerHTML = cards.map(c=>`
+    <div class="dash-card">
+      <div class="dash-card-icon" style="background:${c.color}1a;color:${c.color}">${c.icon}</div>
+      <div class="dash-card-value">${c.value}</div>
+      <div class="dash-card-label">${escapeHtml(c.label)}</div>
+    </div>
+  `).join('');
+
+  const activityList = document.getElementById('dashActivityList');
+  if(activityList){
+    const recent = [...sampleApplications].sort((a,b)=> new Date(b.date)-new Date(a.date)).slice(0,6);
+    activityList.innerHTML = recent.length ? recent.map(a=>{
+      const meta = STATUS_META[a.status] || {cls:'',icon:''};
+      return `<div class="activity-item">
+        <div class="activity-icon ${meta.cls}">${meta.icon}</div>
+        <div class="activity-body">
+          <div class="activity-title">${escapeHtml(a.jobTitle)} — ${escapeHtml(a.company)}</div>
+          <div class="activity-meta">${escapeHtml(a.status)} • ${escapeHtml(formatSampleDate(a.date))}</div>
+        </div>
+      </div>`;
+    }).join('') : '<div class="apps-empty">No recent activity.</div>';
+  }
+
+  const statusBarsEl = document.getElementById('dashStatusBars');
+  if(statusBarsEl) statusBarsEl.innerHTML = buildStatusBarsHtml();
+
+  const updatedEl = document.getElementById('dashUpdated');
+  if(updatedEl){
+    updatedEl.textContent = 'Updated ' + new Date().toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  }
+}
+
+function renderApplicationsTable(){
+  const tbody = document.getElementById('appsTableBody');
+  if(!tbody) return;
+  const searchEl = document.getElementById('appsSearchInput');
+  const filterEl = document.getElementById('appsStatusFilter');
+  const emptyState = document.getElementById('appsEmptyState');
+
+  const query = (searchEl && searchEl.value || '').trim().toLowerCase();
+  const statusFilter = (filterEl && filterEl.value) || 'All';
+
+  const filtered = sampleApplications.filter(a=>{
+    const matchesQuery = !query || a.jobTitle.toLowerCase().includes(query) || a.company.toLowerCase().includes(query);
+    const matchesStatus = statusFilter === 'All' || a.status === statusFilter;
+    return matchesQuery && matchesStatus;
+  }).sort((a,b)=> new Date(b.date)-new Date(a.date));
+
+  tbody.innerHTML = filtered.map(a=>{
+    const meta = STATUS_META[a.status] || {cls:'',icon:''};
+    return `<tr>
+      <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
+      <td data-label="Company">${escapeHtml(a.company)}</td>
+      <td data-label="Match Score"><span class="match-score-pill">${a.matchScore}%</span></td>
+      <td data-label="Date">${escapeHtml(formatSampleDate(a.date))}</td>
+      <td data-label="Status"><span class="status-badge ${meta.cls}">${meta.icon} ${escapeHtml(a.status)}</span></td>
+      <td data-label="Action"><button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button></td>
+    </tr>`;
+  }).join('');
+
+  if(emptyState) emptyState.hidden = filtered.length !== 0;
+}
+
+function renderAnalytics(){
+  const grid = document.getElementById('analyticsStatsGrid');
+  if(!grid) return;
+  const total = sampleApplications.length;
+  const successCount = sampleApplications.filter(a=>a.status==='Success').length;
+  const successRate = total ? Math.round((successCount/total)*100) : 0;
+  const avgMatch = total ? Math.round(sampleApplications.reduce((sum,a)=>sum+a.matchScore,0)/total) : 0;
+  const thisWeek = sampleApplications.filter(a=>daysSince(a.date) <= 7).length;
+
+  const cards = [
+    {label:'Total Applications',        value:total,          icon:'📤', color:'#2563eb'},
+    {label:'Success Rate',              value:successRate+'%', icon:'✅', color:'#16a34a'},
+    {label:'Avg Match Score',           value:avgMatch+'%',    icon:'🎯', color:'#7c3aed'},
+    {label:'Applications This Week',    value:thisWeek,        icon:'📅', color:'#ea580c'},
+  ];
+  grid.innerHTML = cards.map(c=>`
+    <div class="dash-card">
+      <div class="dash-card-icon" style="background:${c.color}1a;color:${c.color}">${c.icon}</div>
+      <div class="dash-card-value">${c.value}</div>
+      <div class="dash-card-label">${escapeHtml(c.label)}</div>
+    </div>
+  `).join('');
+
+  const statusBarsEl = document.getElementById('analyticsStatusBars');
+  if(statusBarsEl) statusBarsEl.innerHTML = buildStatusBarsHtml();
+
+  const sourceBarsEl = document.getElementById('analyticsSourceBars');
+  if(sourceBarsEl) sourceBarsEl.innerHTML = buildSourceBarsHtml();
+
+  const summaryEl = document.getElementById('analyticsSummaryText');
+  if(summaryEl){
+    summaryEl.textContent = `In the current dataset, ${total} applications were sent with a ${successRate}% success rate and an average match score of ${avgMatch}%. ${thisWeek} application${thisWeek===1?'':'s'} went out in the last 7 days.`;
+  }
+}
+
+/* live search + status filter for the Applications table */
+const appsSearchInputEl = document.getElementById('appsSearchInput');
+const appsStatusFilterEl = document.getElementById('appsStatusFilter');
+if(appsSearchInputEl) appsSearchInputEl.addEventListener('input', renderApplicationsTable);
+if(appsStatusFilterEl) appsStatusFilterEl.addEventListener('change', renderApplicationsTable);
+
+/* single delegated listener for the "View" action button in the applications table */
+const appsTableBodyEl = document.getElementById('appsTableBody');
+if(appsTableBodyEl){
+  appsTableBodyEl.addEventListener('click', (e)=>{
+    const btn = e.target.closest('.apps-action-btn');
+    if(!btn) return;
+    const id = Number(btn.dataset.appId);
+    const app = sampleApplications.find(a=>a.id===id);
+    if(!app) return;
+    alert(`${app.jobTitle} at ${app.company}\nMatch Score: ${app.matchScore}%\nStatus: ${app.status}\nDate: ${formatSampleDate(app.date)}\nSource: ${app.source}`);
+  });
+}
+
+/* initial render so Dashboard/Applications/Analytics have content the
+   first time they're opened, even before their nav button is clicked */
+renderDashboard();
+renderApplicationsTable();
+renderAnalytics();
