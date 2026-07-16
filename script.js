@@ -432,7 +432,8 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
   const dateTimeValue = fallbackText(source.dateTime || `${dateValue} ${timeValue}`, `${dateValue} ${timeValue}`);
   const matchScoreValue = Number.isFinite(Number(source.matchScore ?? fallback.matchScore ?? 0)) ? Number(source.matchScore ?? fallback.matchScore ?? 0) : 0;
   const statusValue = fallbackText(source.status || fallback.status || 'Pending Review', 'Pending Review');
-  const applyUrlValue = fallbackText(source.applyUrl || fallback.applyUrl || source.url || fallback.url || 'https://jobs.example.com/apply', 'https://jobs.example.com/apply');
+  const applicationUrlValue = fallbackText(source.applicationUrl || source.applyUrl || source.url || fallback.applicationUrl || fallback.applyUrl || fallback.url || '', '');
+  const applyUrlValue = fallbackText(source.applyUrl || source.applicationUrl || source.url || fallback.applyUrl || fallback.applicationUrl || fallback.url || '', '');
   const resumeUsedValue = Boolean(source.resumeUsed ?? source.resumeUploaded ?? source.resumeDataUrl ?? fallback.resumeUploaded ?? fallback.resumeDataUrl ?? source.resumeFileName ?? fallback.resumeFileName);
   const coverLetterUsedValue = Boolean(source.coverLetterUsed ?? source.coverLetter ?? source.autoCover ?? fallback.coverLetter ?? fallback.autoCover ?? source.coverLetterText ?? fallback.coverLetterText);
   const normalized = {
@@ -445,6 +446,7 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
     company,
     location,
     source: sourceName,
+    applicationUrl: applicationUrlValue,
     applyUrl: applyUrlValue,
     matchScore: matchScoreValue,
     status: statusValue,
@@ -465,7 +467,8 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
   if(!normalized.status) normalized.status = 'Pending Review';
   if(!normalized.employmentType) normalized.employmentType = 'Full-time';
   if(!normalized.experienceLevel) normalized.experienceLevel = 'Mid Level';
-  if(!normalized.applyUrl) normalized.applyUrl = 'https://jobs.example.com/apply';
+  if(!normalized.applyUrl) normalized.applyUrl = '';
+  if(!normalized.applicationUrl) normalized.applicationUrl = '';
   return normalized;
 }
 
@@ -696,7 +699,7 @@ const jobProviderService = {
             jobType: 'Full-time',
             remote,
             description: `Opportunity for a ${role.toLowerCase()} role focused on impact, collaboration, and shipping high quality work.`,
-            applyUrl: `https://jobs.example.com/apply/${company.toLowerCase().replace(/[^a-z0-9]+/g,'-')}/${i}`,
+            applicationUrl: '',
             source,
             postedDate: new Date().toISOString().slice(0,10),
             automationPossible: Boolean(profile.resumeUploaded)
@@ -746,6 +749,15 @@ function createJobProviderContext(){
   };
 }
 
+function isValidUrl(url){
+  try {
+    new URL(String(url).trim());
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 function applyJobProviderFilters(jobs){
   const preferredRoles = normalizeArrayString(profileState.roles).map(v=>v.toLowerCase());
   const preferredLocations = normalizeArrayString(profileState.preferredLocations).map(v=>v.toLowerCase());
@@ -787,17 +799,18 @@ function resumeWorkflow(){ if(workflowState.status !== 'paused') return false; r
 function stopWorkflow(reason = 'stopped'){ return setWorkflowState('stopped', {pauseReason: reason, currentStatus:'stopped'}); }
 
 function prepareApplicationPayload(job){
-  const applyUrl = String(job.applyUrl || '').trim();
-  const automationPossible = Boolean(job.automationPossible !== false && profileState.resumeUploaded && applyUrl);
-  if(applyUrl){
-    try { window.open(applyUrl, '_blank', 'noopener,noreferrer'); } catch (err) {}
+  const applicationUrl = String(job.applicationUrl || '').trim();
+  const automationPossible = Boolean(job.automationPossible !== false && profileState.resumeUploaded && applicationUrl && isValidUrl(applicationUrl));
+  if(applicationUrl && isValidUrl(applicationUrl)){
+    try { window.open(applicationUrl, '_blank', 'noopener,noreferrer'); } catch (err) {}
   }
   const manualReviewRequired = !automationPossible || !profileState.autoApply;
   return {
-    applyUrl,
+    applicationUrl,
+    applyUrl: applicationUrl,
     automationPossible,
     manualReviewRequired,
-    notes: manualReviewRequired ? 'Manual review required because the application could not be automated automatically.' : 'Resume and cover letter prepared for automated submission.'
+    notes: applicationUrl && isValidUrl(applicationUrl) ? 'Resume and cover letter prepared for automated submission.' : 'Application URL unavailable.'
   };
 }
 
@@ -1021,9 +1034,10 @@ function buildApplicationResult(job, attemptNumber = 0, profileStateOverride, ra
   }
   const state = profileStateOverride || profileState || {};
   const autoApply = state.autoApply !== false;
+  const applicationUrl = String(job && job.applicationUrl || '').trim();
   const baseScore = Number(job && job.matchScore) || 0;
   if(!autoApply) return 'Manual Action Needed';
-  if(!job || !String(job.applyUrl || '').trim()) return 'Manual Action Needed';
+  if(!job || !applicationUrl || !isValidUrl(applicationUrl)) return 'Manual Action Needed';
   if(!state.resumeUploaded) return 'Manual Action Needed';
   const source = String(job.source || '').toLowerCase();
   if(source.includes('glassdoor')) return 'Permanent Failure';
