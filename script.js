@@ -601,13 +601,18 @@ function addDemoJob(){
 }
 
 async function runDemoScan(){
-  if(scanWaiting && !workflowRunning){
+  if(scanWaiting){
     addActivity('Demo scan trigger received while waiting for the next scan.');
     addNotification('Scan Triggered', 'The workflow will resume after the wait for next scan.');
     await executeWorkflowNode(null, 'n19', 'completed', 'completed');
     scanWaiting = false;
     renderNotifications();
-    runWorkflow();
+    if(workflowRunning){
+      resumeAfterScanTrigger = true;
+      addActivity('Workflow currently running; it will resume after the current run completes.');
+    } else {
+      runWorkflow();
+    }
     return;
   }
 
@@ -653,6 +658,7 @@ const WORKFLOW_STATUS_COLOR = {
 let workflowRunning = false;
 let workflowPauseContext = null;
 let scanWaiting = false;
+let resumeAfterScanTrigger = false;
 
 function applyWorkflowNodeStyle(id, status){
   const node = nodeState[id];
@@ -1227,6 +1233,12 @@ async function runWorkflow(){
 
   renderNotifications();
   workflowRunning = false;
+  if(resumeAfterScanTrigger){
+    resumeAfterScanTrigger = false;
+    addActivity('Resuming workflow after scheduled scan trigger.');
+    runWorkflow();
+    return;
+  }
   if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
   showToast(waitingForNextScan ? 'Workflow paused until next scan.' : 'Workflow completed.', waitingForNextScan ? 'info' : 'success');
 }
