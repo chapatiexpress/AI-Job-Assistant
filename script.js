@@ -404,45 +404,48 @@ const DEFAULT_APP_STATE = {
     lastUpdatedAt:new Date().toISOString()
   },
   workflowSettings:{},
-  notifications:[
-    {id:1,title:'Welcome!',message:'Your AI Job Assistant is ready. Try running the demo workflow.',date:new Date().toISOString(),read:false}
-  ],
-  activity:[
-    {id:1,message:'Application tracker initialized.',date:new Date().toISOString()}
-  ],
-  jobs:[
-    {id:101,jobTitle:'Frontend Developer',company:'Nimbus Cloud',location:'Remote',source:'LinkedIn',matchScore:92,matched:true,foundDate:'2026-07-15',status:'Matched'},
-    {id:102,jobTitle:'React Developer',company:'Brightline Labs',location:'New York, NY',source:'Indeed',matchScore:88,matched:true,foundDate:'2026-07-15',status:'Matched'},
-    {id:103,jobTitle:'UI Engineer',company:'Fenwick Data',location:'Remote',source:'Glassdoor',matchScore:81,matched:false,foundDate:'2026-07-14',status:'Found'},
-    {id:104,jobTitle:'JavaScript Developer',company:'Solace Systems',location:'Chicago, IL',source:'Company Website',matchScore:76,matched:false,foundDate:'2026-07-14',status:'Found'},
-    {id:105,jobTitle:'Web Developer',company:'Harborlight Inc',location:'Austin, TX',source:'LinkedIn',matchScore:70,matched:false,foundDate:'2026-07-13',status:'Found'}
-  ],
-  applications:[
-    {id:1,jobTitle:'Frontend Developer',company:'Nimbus Cloud',location:'Remote',source:'LinkedIn',matchScore:92,date:'2026-07-15',status:'Success',jobDescription:'Build interactive interfaces for hiring workflows.',resumeUsed:'resume.pdf',coverLetter:'Experienced frontend developer with AI-assisted automation experience.',failureReason:'',createdAt:'2026-07-14T08:45:00',updatedAt:'2026-07-15T10:12:00',role:'Frontend Developer'},
-    {id:2,jobTitle:'React Developer',company:'Brightline Labs',location:'New York, NY',source:'Indeed',matchScore:88,date:'2026-07-15',status:'Success',jobDescription:'Expand the platform frontend using React and performance optimizations.',resumeUsed:'resume.pdf',coverLetter:'Skilled in React, Hooks, and responsive UI design.',failureReason:'',createdAt:'2026-07-14T09:20:00',updatedAt:'2026-07-15T11:05:00',role:'React Developer'},
-    {id:3,jobTitle:'UI Engineer',company:'Fenwick Data',location:'Remote',source:'Glassdoor',matchScore:81,date:'2026-07-14',status:'Pending Review',jobDescription:'Design polished user flows and component libraries.',resumeUsed:'resume.pdf',coverLetter:'Focused on usability and clean implementation.',failureReason:'',createdAt:'2026-07-13T17:12:00',updatedAt:'2026-07-14T08:50:00',role:'UI Engineer'},
-    {id:4,jobTitle:'JavaScript Developer',company:'Solace Systems',location:'Chicago, IL',source:'Company Website',matchScore:76,date:'2026-07-14',status:'Temporary Failure',jobDescription:'Implement automation tasks and client-side dashboards.',resumeUsed:'resume.pdf',coverLetter:'Strong JavaScript background with automation workflows.',failureReason:'Application timed out during submission.',createdAt:'2026-07-13T18:30:00',updatedAt:'2026-07-14T13:45:00',role:'JavaScript Developer'},
-    {id:5,jobTitle:'Web Developer',company:'Harborlight Inc',location:'Austin, TX',source:'LinkedIn',matchScore:70,date:'2026-07-13',status:'Permanent Failure',jobDescription:'Maintain web applications and front-end systems.',resumeUsed:'resume.pdf',coverLetter:'Experience with web development and team collaboration.',failureReason:'Position closed before application was delivered.',createdAt:'2026-07-12T15:10:00',updatedAt:'2026-07-13T09:30:00',role:'Web Developer'}
-  ],
-  settings:{nextJobId:106,nextApplicationId:6,pageSize:8,demoMode:true}
+  notifications:[],
+  activity:[],
+  jobs:[],
+  applications:[],
+  settings:{nextJobId:101,nextApplicationId:1,pageSize:8,demoMode:false}
 };
 
 function loadAppState(){
   try{
     const saved = JSON.parse(localStorage.getItem(APP_STORAGE_KEY) || 'null');
     if(saved && typeof saved === 'object'){
+      const cleaned = cleanDemoData(saved);
       return {
-        profile:{...DEFAULT_APP_STATE.profile, ...(saved.profile||{})},
-        workflowSettings: saved.workflowSettings || {},
-        notifications: Array.isArray(saved.notifications)?saved.notifications:DEFAULT_APP_STATE.notifications.slice(),
-        activity: Array.isArray(saved.activity)?saved.activity:DEFAULT_APP_STATE.activity.slice(),
-        jobs: Array.isArray(saved.jobs)?saved.jobs:DEFAULT_APP_STATE.jobs.slice(),
-        applications: Array.isArray(saved.applications)?saved.applications:DEFAULT_APP_STATE.applications.slice(),
-        settings:{...DEFAULT_APP_STATE.settings, ...(saved.settings||{})}
+        profile:{...DEFAULT_APP_STATE.profile, ...(cleaned.profile||{})},
+        workflowSettings: cleaned.workflowSettings || {},
+        notifications: Array.isArray(cleaned.notifications)?cleaned.notifications:DEFAULT_APP_STATE.notifications.slice(),
+        activity: Array.isArray(cleaned.activity)?cleaned.activity:DEFAULT_APP_STATE.activity.slice(),
+        jobs: Array.isArray(cleaned.jobs)?cleaned.jobs:DEFAULT_APP_STATE.jobs.slice(),
+        applications: Array.isArray(cleaned.applications)?cleaned.applications:DEFAULT_APP_STATE.applications.slice(),
+        settings:{...DEFAULT_APP_STATE.settings, ...(cleaned.settings||{})}
       };
     }
   }catch(e){}
   return JSON.parse(JSON.stringify(DEFAULT_APP_STATE));
+}
+
+function cleanDemoData(state){
+  if(!state || typeof state !== 'object') return state;
+  const cleaned = {...state};
+  if(Array.isArray(cleaned.notifications)){
+    cleaned.notifications = cleaned.notifications.filter(n=> !n || n.demo !== true);
+  }
+  if(Array.isArray(cleaned.activity)){
+    cleaned.activity = cleaned.activity.filter(a=> !a || a.demo !== true);
+  }
+  if(Array.isArray(cleaned.jobs)){
+    cleaned.jobs = cleaned.jobs.filter(j=> !j || j.demo !== true && !(typeof j.id === 'string' && j.id.startsWith('demo-')));
+  }
+  if(Array.isArray(cleaned.applications)){
+    cleaned.applications = cleaned.applications.filter(a=> !a || a.demo !== true && !(typeof a.id === 'string' && a.id.startsWith('demo-')));
+  }
+  return cleaned;
 }
 
 function saveAppState(){
@@ -1355,8 +1358,8 @@ function daysSince(dateStr){
 
 function computeDashboardStats(){
   return {
-    totalJobsFound: 248,   // upstream metric from job search, sample value
-    jobsMatched: 86,       // upstream metric from AI matching stage, sample value
+    totalJobsFound: (appState.jobs || []).length,
+    jobsMatched: (appState.jobs || []).filter(j=>j.matched).length,
     applicationsSent: sampleApplications.length,
     pendingReviews: sampleApplications.filter(a=>a.status==='Pending Review').length,
     successful: sampleApplications.filter(a=>a.status==='Success').length,
@@ -1365,10 +1368,11 @@ function computeDashboardStats(){
 }
 
 function buildStatusBarsHtml(){
-  const total = sampleApplications.length || 1;
+  if(sampleApplications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
+  const total = sampleApplications.length;
   return STATUS_ORDER.map(status=>{
     const count = sampleApplications.filter(a=>a.status===status).length;
-    const pct = Math.round((count/total)*100);
+    const pct = total ? Math.round((count/total)*100) : 0;
     const meta = STATUS_META[status];
     return `<div class="bar-row">
       <div class="bar-label">${escapeHtml(status)}</div>
@@ -1379,11 +1383,12 @@ function buildStatusBarsHtml(){
 }
 
 function buildSourceBarsHtml(){
-  const total = sampleApplications.length || 1;
+  if(sampleApplications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
+  const total = sampleApplications.length;
   const sources = [...new Set(sampleApplications.map(a=>a.source))];
   return sources.map(source=>{
     const count = sampleApplications.filter(a=>a.source===source).length;
-    const pct = Math.round((count/total)*100);
+    const pct = total ? Math.round((count/total)*100) : 0;
     return `<div class="bar-row">
       <div class="bar-label">${escapeHtml(source)}</div>
       <div class="bar-track"><div class="bar-fill bar-fill-neutral" style="width:${pct}%"></div></div>
@@ -1424,7 +1429,7 @@ function renderDashboard(){
           <div class="activity-meta">${escapeHtml(a.status)} • ${escapeHtml(formatSampleDate(a.date))}</div>
         </div>
       </div>`;
-    }).join('') : '<div class="apps-empty">No recent activity.</div>';
+    }).join('') : '<div class="apps-empty">No recent activity yet.</div>';
   }
 
   const statusBarsEl = document.getElementById('dashStatusBars');
@@ -1477,7 +1482,14 @@ function renderApplicationsTable(){
     </tr>`;
   }).join('');
 
-  if(emptyState) emptyState.hidden = filtered.length !== 0;
+  if(emptyState){
+    if(sampleApplications.length === 0){
+      emptyState.textContent = 'No applications yet. Applications will appear here after you submit a job application.';
+    } else {
+      emptyState.textContent = 'No applications match your search or filter.';
+    }
+    emptyState.hidden = filtered.length !== 0;
+  }
 }
 
 function renderAnalytics(){
@@ -1511,7 +1523,11 @@ function renderAnalytics(){
 
   const summaryEl = document.getElementById('analyticsSummaryText');
   if(summaryEl){
-    summaryEl.textContent = `In the current dataset, ${total} applications were sent with a ${successRate}% success rate and an average match score of ${avgMatch}%. ${thisWeek} application${thisWeek===1?'':'s'} went out in the last 7 days.`;
+    if(total === 0){
+      summaryEl.textContent = 'Analytics will appear after application activity is recorded.';
+    } else {
+      summaryEl.textContent = `In the current dataset, ${total} applications were sent with a ${successRate}% success rate and an average match score of ${avgMatch}%. ${thisWeek} application${thisWeek===1?'':'s'} went out in the last 7 days.`;
+    }
   }
 }
 
