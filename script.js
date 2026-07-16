@@ -627,12 +627,13 @@ function delay(ms){
   return new Promise(resolve=>setTimeout(resolve, ms));
 }
 
+const workflowEngine = typeof window !== 'undefined' && window.WorkflowEngine ? window.WorkflowEngine : {};
 const WORKFLOW_SEQUENCE = ['n1','n2','n3','n4','n5','n6','d7','n8','n9','n10','n11','n12','n14','n16','n17'];
 const WORKFLOW_STATUS_COLOR = {
   completed:'#16a34a',
   pending:'#ea580c',
   failed:'#dc2626',
-  skipped:'#2563eb'
+  skipped:'#64748b'
 };
 let workflowRunning = false;
 
@@ -650,6 +651,31 @@ function clearWorkflowNodeStyles(){
     n.el.style.borderColor = '';
     n.el.style.boxShadow = '';
   });
+}
+
+function clearWorkflowSelection(){
+  Object.values(nodeState).forEach(n=>{
+    if(n && n.el) n.el.classList.remove('selected');
+  });
+}
+
+function setCurrentWorkflowNode(id){
+  clearWorkflowSelection();
+  const node = nodeState[id];
+  if(!node || !node.el) return;
+  node.el.classList.add('selected');
+  applyWorkflowNodeStyle(id,'pending');
+}
+
+function markWorkflowNode(id, status){
+  const node = nodeState[id];
+  if(!node || !node.el) return;
+  node.el.classList.remove('selected');
+  applyWorkflowNodeStyle(id,status);
+}
+
+function markWorkflowNodesSkipped(ids){
+  ids.forEach(id=>markWorkflowNode(id,'skipped'));
 }
 
 function validateProfileForWorkflow(){
@@ -763,26 +789,53 @@ function createCoverLetter(job){
   return `Dear Hiring Team,\n\nI am excited to apply for the ${job.jobTitle} role at ${job.company}. With my experience in ${normalizeArrayString(profileState.skills).join(', ')}, I am confident I can contribute to your team.\n\nBest regards,\n${profileState.firstName}`;
 }
 
-function buildApplicationResult(job){
-  const autoApply = profileState.autoApply !== false;
-  const baseScore = job.matchScore;
+function buildApplicationResult(job, attemptNumber = 0, profileStateOverride, randomProvider){
+  if(window.WorkflowEngine && typeof window.WorkflowEngine.buildApplicationResult === 'function'){
+    return window.WorkflowEngine.buildApplicationResult(job, attemptNumber, profileStateOverride, randomProvider);
+  }
+  const state = profileStateOverride || profileState || {};
+  const autoApply = state.autoApply !== false;
+  const baseScore = Number(job && job.matchScore) || 0;
   if(!autoApply) return 'Pending Review';
-  const random = Math.random();
+  const random = typeof randomProvider === 'function' ? randomProvider() : Math.random();
   if(baseScore >= 90 && random > 0.2) return 'Success';
   if(random < 0.12) return 'Temporary Failure';
-  if(random < 0.2) return 'Manual Review';
+  if(random < 0.2) return 'Manual Action Needed';
   if(random < 0.28) return 'Permanent Failure';
   return 'Success';
 }
 
-async function highlightNode(id, status='completed', duration=900){
-  const node = nodeState[id];
-  if(!node || !node.el) return;
-  node.el.classList.add('selected');
-  applyWorkflowNodeStyle(id,'pending');
+async function highlightNode(id, status='completed', duration=750){
+  setCurrentWorkflowNode(id);
   await delay(duration);
-  node.el.classList.remove('selected');
-  applyWorkflowNodeStyle(id,status);
+  markWorkflowNode(id,status);
+}
+
+function createApplicationRecord(job, status, extra = {}){
+  const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
+  const application = {
+    id: nextId,
+    jobTitle: job.jobTitle,
+    company: job.company,
+    location: job.location,
+    source: job.source,
+    matchScore: job.matchScore,
+    date: new Date().toISOString().slice(0,10),
+    status,
+    coverLetter: profileState.autoCover ? createCoverLetter(job) : '',
+    demo:true,
+    ...extra
+  };
+  appState.settings.nextApplicationId = nextId + 1;
+  return application;
+}
+
+function persistApplication(job, status, extra = {}){
+  const application = createApplicationRecord(job, status, extra);
+  sampleApplications.unshift(application);
+  saveAppState();
+  renderApplicationsTable();
+  return application;
 }
 
 async function runWorkflow(){
@@ -800,6 +853,16 @@ async function runWorkflow(){
     return;
   }
 
+  const triggerSettings = getNodeSettings('n1');
+  if(triggerSettings.enabled === false){
+    await highlightNode('n1','skipped');
+    markWorkflowNodesSkipped(['n2','n3','n4','n5','n6','d7','n8','n9','n10','n11','n12','d13','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','n18','n19','pending','skip']);
+    workflowRunning = false;
+    if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+    showToast('Workflow stopped because the trigger is disabled.', 'warning');
+    return;
+  }
+
   addActivity('Workflow started.');
   addNotification('Workflow Started', 'The demo workflow has begun.');
 
@@ -812,14 +875,13 @@ async function runWorkflow(){
   await highlightNode('n3');
 
   const uniqueJobs = filterUniqueJobs(foundJobs);
-  jobsData = uniqueJobs.map(job => ({
+  const threshold = Number(profileState.minMatchScore || 75);
+  const scoredJobs = uniqueJobs.map(job => ({
     ...job,
     matchScore: computeJobMatchScore(job),
+    matched: computeJobMatchScore(job) >= threshold
   }));
-  jobsData = jobsData.map(job => ({
-    ...job,
-    matched: job.matchScore >= Number(profileState.minMatchScore || 75)
-  }));
+  jobsData = scoredJobs;
   appState.jobs = jobsData;
   saveAppState();
   await highlightNode('n4', uniqueJobs.length ? 'completed' : 'skipped');
@@ -827,106 +889,166 @@ async function runWorkflow(){
   await highlightNode('n5');
   await highlightNode('n6');
 
-  await highlightNode('d7', jobsData.some(job=>job.matched) ? 'completed' : 'pending');
-
-  let filteredJobs = jobsData.filter(job=>job.matched);
-  filteredJobs = applyPreferenceFilters(filteredJobs);
-  jobsData = filteredJobs;
-  appState.jobs = jobsData;
-  saveAppState();
-  await highlightNode('n8', filteredJobs.length ? 'completed' : 'skipped');
-
-  const existingJobKeys = new Set(sampleApplications.map(a=>`${a.jobTitle}|${a.company}|${a.location}`));
-  filteredJobs = filteredJobs.filter(job=>!existingJobKeys.has(`${job.jobTitle}|${job.company}|${job.location}`));
-  jobsData = filteredJobs;
-  appState.jobs = jobsData;
-  saveAppState();
-  await highlightNode('n9', filteredJobs.length ? 'completed' : 'skipped');
-
-  const limitedJobs = enforceDailyLimit(filteredJobs);
-  jobsData = limitedJobs;
-  appState.jobs = jobsData;
-  saveAppState();
-  await highlightNode('n10', limitedJobs.length ? 'completed' : 'skipped');
-
-  await highlightNode('n11', profileState.autoCover ? 'completed' : 'skipped');
-  await highlightNode('n12', limitedJobs.length ? 'completed' : 'skipped');
-
-  const manualReviewRequired = profileState.autoApply === false;
-  if(manualReviewRequired){
-    await highlightNode('d13', 'completed');
-    const pendingApps = limitedJobs.map(job => {
-      const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
-      const application = {
-        id: nextId,
-        jobTitle: job.jobTitle,
-        company: job.company,
-        location: job.location,
-        source: job.source,
-        matchScore: job.matchScore,
-        date: new Date().toISOString().slice(0,10),
-        status: 'Pending Review',
-        coverLetter: profileState.autoCover ? createCoverLetter(job) : '',
-        manualReviewRequired:true,
-        demo:true
-      };
-      appState.settings.nextApplicationId = nextId + 1;
-      return application;
-    });
-    if(pendingApps.length){
-      sampleApplications.unshift(...pendingApps);
-      saveAppState();
-      renderApplicationsTable();
-      renderDashboard();
-      renderAnalytics();
-      addActivity(`Workflow paused; ${pendingApps.length} applications awaiting manual review.`);
-      addNotification('Application waiting for manual approval', `${pendingApps.length} jobs are pending review.`);
-    }
-    await highlightNode('pending', pendingApps.length ? 'completed' : 'skipped');
-    await highlightNode('n14', 'skipped');
-    renderNotifications();
+  const matchedJobs = scoredJobs.filter(job=>job.matched);
+  if(!matchedJobs.length){
+    await highlightNode('d7','skipped');
+    markWorkflowNodesSkipped(['n8','n9','n10','n11','n12','d13','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','n18','pending','skip']);
+    await highlightNode('n19','completed');
     workflowRunning = false;
     if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-    showToast('Workflow completed. Pending review required.', 'warning');
+    showToast('Workflow completed. No jobs matched the threshold.', 'info');
     return;
   }
 
-  await highlightNode('d13', 'skipped');
-  const createdApps = limitedJobs.map(job=>{
-    const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
-    const status = buildApplicationResult(job);
-    const application = {
-      id: nextId,
-      jobTitle: job.jobTitle,
-      company: job.company,
-      location: job.location,
-      source: job.source,
-      matchScore: job.matchScore,
-      date: new Date().toISOString().slice(0,10),
-      status,
-      coverLetter: profileState.autoCover ? createCoverLetter(job) : '',
-      demo:true
-    };
-    appState.settings.nextApplicationId = nextId + 1;
-    return application;
-  });
-  if(createdApps.length){
-    sampleApplications.unshift(...createdApps);
-    saveAppState();
+  const existingJobKeys = new Set(sampleApplications.map(a=>`${a.jobTitle}|${a.company}|${a.location}`));
+  const blacklistedCompanies = new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v=>v.toLowerCase()));
+  const dailyLimit = Number(profileState.dailyLimit) || 30;
+  let applicationsCount = 0;
+  let completedJobs = 0;
+
+  for(const job of matchedJobs){
+    const jobKey = `${job.jobTitle}|${job.company}|${job.location}`;
+    const scoreAboveThreshold = job.matchScore >= threshold;
+    await highlightNode('d7', scoreAboveThreshold ? 'completed' : 'skipped');
+
+    if(!scoreAboveThreshold){
+      await highlightNode('skip','completed');
+      await highlightNode('n18','completed');
+      completedJobs += 1;
+      continue;
+    }
+
+    await highlightNode('n8','completed');
+    const preferencePass = applyPreferenceFilters([job]).length > 0;
+    if(!preferencePass){
+      await highlightNode('n9','skipped');
+      await highlightNode('skip','completed');
+      await highlightNode('n18','completed');
+      completedJobs += 1;
+      continue;
+    }
+
+    const isAlreadyApplied = existingJobKeys.has(jobKey);
+    const isBlacklisted = blacklistedCompanies.has(String(job.company||'').toLowerCase());
+    await highlightNode('n9', (isAlreadyApplied || isBlacklisted) ? 'skipped' : 'completed');
+    if(isAlreadyApplied || isBlacklisted){
+      await highlightNode('skip','completed');
+      await highlightNode('n18','completed');
+      completedJobs += 1;
+      continue;
+    }
+
+    await highlightNode('n10', 'completed');
+    if(applicationsCount >= dailyLimit){
+      markWorkflowNodesSkipped(['n11','n12','d13','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','pending','skip']);
+      await highlightNode('n19','completed');
+      break;
+    }
+
+    await highlightNode('n11','completed');
+    await highlightNode('n12','completed');
+
+    const manualReviewRequired = profileState.autoApply === false;
+    if(manualReviewRequired){
+      await highlightNode('d13','completed');
+      persistApplication(job, 'Pending Review', {manualReviewRequired:true, coverLetter: profileState.autoCover ? createCoverLetter(job) : ''});
+      renderDashboard();
+      renderAnalytics();
+      addActivity(`Workflow paused for ${job.jobTitle} at ${job.company}.`);
+      addNotification('Pending Review', `${job.jobTitle} at ${job.company} is waiting for approval.`);
+      await highlightNode('pending','completed');
+      await highlightNode('n18','completed');
+      completedJobs += 1;
+      applicationsCount += 1;
+      existingJobKeys.add(jobKey);
+      continue;
+    }
+
+    await highlightNode('d13','skipped');
+    await highlightNode('n14','completed');
+
+    const initialResult = buildApplicationResult(job, 0, profileState);
+    let finalResult = initialResult;
+
+    if(initialResult === 'Temporary Failure'){
+      const retryLimit = Number(profileState.retryLimit || 1);
+      let retrySucceeded = false;
+      for(let attempt=1; attempt <= retryLimit; attempt++){
+        const retryResult = buildApplicationResult(job, attempt, profileState);
+        if(retryResult === 'Success'){ finalResult = 'Success'; retrySucceeded = true; break; }
+        if(retryResult === 'Manual Action Needed'){ finalResult = 'Manual Action Needed'; break; }
+        if(retryResult === 'Permanent Failure'){ finalResult = 'Permanent Failure'; break; }
+      }
+      if(!retrySucceeded && finalResult === 'Temporary Failure'){ finalResult = 'Permanent Failure'; }
+    }
+
+    if(finalResult === 'Success'){
+      await highlightNode('success','completed');
+      await highlightNode('st-success','completed');
+      persistApplication(job, 'Success');
+      renderDashboard();
+      renderAnalytics();
+      addActivity(`Application succeeded for ${job.jobTitle} at ${job.company}.`);
+      addNotification('Application Submitted', `${job.jobTitle} at ${job.company} was submitted successfully.`);
+      await highlightNode('n16','completed');
+      await highlightNode('n17','completed');
+      applicationsCount += 1;
+      existingJobKeys.add(jobKey);
+      await highlightNode('n18','completed');
+      completedJobs += 1;
+      continue;
+    }
+
+    if(finalResult === 'Temporary Failure'){
+      await highlightNode('tempfail','completed');
+      await highlightNode('st-temp','completed');
+      persistApplication(job, 'Temporary Failure');
+      renderDashboard();
+      renderAnalytics();
+      addActivity(`Application temporarily failed for ${job.jobTitle} at ${job.company}.`);
+      addNotification('Temporary Failure', `${job.jobTitle} at ${job.company} needs another attempt.`);
+      await highlightNode('n16','completed');
+      await highlightNode('n17','completed');
+      applicationsCount += 1;
+      existingJobKeys.add(jobKey);
+      await highlightNode('n18','completed');
+      completedJobs += 1;
+      continue;
+    }
+
+    if(finalResult === 'Manual Action Needed'){
+      await highlightNode('manual','completed');
+      await highlightNode('st-manual','completed');
+      persistApplication(job, 'Pending Review', {manualReviewRequired:true});
+      addActivity(`Manual action required for ${job.jobTitle} at ${job.company}.`);
+      await highlightNode('pending','completed');
+      applicationsCount += 1;
+      existingJobKeys.add(jobKey);
+      await highlightNode('n18','completed');
+      completedJobs += 1;
+      continue;
+    }
+
+    await highlightNode('permfail','completed');
+    await highlightNode('st-perm','completed');
+    persistApplication(job, 'Permanent Failure');
+    renderDashboard();
+    renderAnalytics();
+    addActivity(`Application permanently failed for ${job.jobTitle} at ${job.company}.`);
+    addNotification('Permanent Failure', `${job.jobTitle} at ${job.company} could not be submitted.`);
+    await highlightNode('n16','completed');
+    await highlightNode('n17','completed');
+    applicationsCount += 1;
+    existingJobKeys.add(jobKey);
+    await highlightNode('n18','completed');
+    completedJobs += 1;
   }
-  await highlightNode('n14', createdApps.length ? 'completed' : 'skipped');
 
-  renderApplicationsTable();
-  renderDashboard();
-  renderAnalytics();
-  await highlightNode('n16', createdApps.length ? 'completed' : 'skipped');
-
-  addActivity(`Workflow completed with ${createdApps.length} applications.`);
-  addNotification('Workflow Completed', `${createdApps.length} applications were generated.`);
-  await highlightNode('n17', createdApps.length ? 'completed' : 'pending');
+  if(completedJobs >= matchedJobs.length){
+    await highlightNode('n19','completed');
+  }
 
   renderNotifications();
-
   workflowRunning = false;
   if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
   showToast('Workflow completed.', 'success');
