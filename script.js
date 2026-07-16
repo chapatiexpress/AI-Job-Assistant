@@ -652,9 +652,13 @@ const fieldConfigs = {
     {key:'scanFrequency', label:'Scan Frequency', type:'select', options:['Every 15 minutes','Hourly','Every 6 hours','Daily'], default:'Hourly'},
   ],
   n2: [ // Load Profile and Resume
-    {key:'resume', label:'Resume', type:'text', default:'resume.pdf'},
-    {key:'skills', label:'Skills', type:'text', default:'JavaScript, React, Node.js'},
-    {key:'experience', label:'Experience', type:'text', default:'3+ years'},
+    {key:'resume', label:'Resume', type:'text', default:'', readonly:true},
+    {key:'skills', label:'Skills', type:'text', default:'', readonly:true},
+    {key:'experience', label:'Experience', type:'text', default:'', readonly:true},
+    {key:'preferredRoles', label:'Preferred Roles', type:'text', default:'', readonly:true},
+    {key:'preferredLocations', label:'Preferred Locations', type:'text', default:'', readonly:true},
+    {key:'resumeUploaded', label:'Resume Uploaded', type:'text', default:'No', readonly:true},
+    {key:'lastUpdatedAt', label:'Last Updated', type:'text', default:'', readonly:true},
   ],
   n3: [ // Find Jobs
     {key:'jobBoards', label:'Job Boards', type:'text', default:'LinkedIn, Indeed, Glassdoor'},
@@ -718,6 +722,17 @@ function getNodeSettings(id){
   cfg.forEach(f=>{
     fields[f.key] = (saved.fields && saved.fields[f.key] !== undefined) ? saved.fields[f.key] : f.default;
   });
+
+  if(id === 'n2'){
+    fields.resume = profileState.resumeFileName || '';
+    fields.skills = Array.isArray(profileState.skills) ? profileState.skills.join(', ') : String(profileState.skills || '').trim();
+    fields.experience = profileState.experience || '';
+    fields.preferredRoles = profileState.roles || '';
+    fields.preferredLocations = profileState.preferredLocations || '';
+    fields.resumeUploaded = profileState.resumeUploaded ? 'Yes' : 'No';
+    fields.lastUpdatedAt = profileState.lastUpdatedAt ? formatDateTime(profileState.lastUpdatedAt) : '';
+  }
+
   return {
     status: saved.status || 'Active',
     enabled: saved.enabled !== undefined ? saved.enabled : true,
@@ -748,19 +763,20 @@ function applyAllSavedVisuals(){
 applyAllSavedVisuals();
 
 function fieldHTML(f, value){
+  const readonlyAttr = f.readonly ? ' readonly' : '';
   switch(f.type){
     case 'text':
-      return `<div class="field"><label>${escapeHtml(f.label)}</label><input type="text" class="field-input" data-key="${f.key}" value="${escapeHtml(value)}"></div>`;
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><input type="text" class="field-input" data-key="${f.key}" value="${escapeHtml(value)}"${readonlyAttr}></div>`;
     case 'number':
-      return `<div class="field"><label>${escapeHtml(f.label)}</label><input type="number" class="field-input" data-key="${f.key}" value="${escapeHtml(value)}"></div>`;
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><input type="number" class="field-input" data-key="${f.key}" value="${escapeHtml(value)}"${readonlyAttr}></div>`;
     case 'select':
-      return `<div class="field"><label>${escapeHtml(f.label)}</label><select class="field-input" data-key="${f.key}">${f.options.map(o=>`<option value="${escapeHtml(o)}" ${o===value?'selected':''}>${escapeHtml(o)}</option>`).join('')}</select></div>`;
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><select class="field-input" data-key="${f.key}"${f.readonly ? ' disabled' : ''}>${f.options.map(o=>`<option value="${escapeHtml(o)}" ${o===value?'selected':''}>${escapeHtml(o)}</option>`).join('')}</select></div>`;
     case 'toggle':
-      return `<div class="field field-row"><label>${escapeHtml(f.label)}</label><label class="switch"><input type="checkbox" class="field-input" data-key="${f.key}" ${value?'checked':''}><span class="slider"></span></label></div>`;
+      return `<div class="field field-row"><label>${escapeHtml(f.label)}</label><label class="switch"><input type="checkbox" class="field-input" data-key="${f.key}" ${value?'checked':''} ${f.readonly ? 'disabled' : ''}><span class="slider"></span></label></div>`;
     case 'textarea':
-      return `<div class="field"><label>${escapeHtml(f.label)}</label><textarea class="field-input" data-key="${f.key}" rows="3">${escapeHtml(value)}</textarea></div>`;
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><textarea class="field-input" data-key="${f.key}" rows="3"${readonlyAttr}>${escapeHtml(value)}</textarea></div>`;
     case 'range':
-      return `<div class="field"><label>${escapeHtml(f.label)}</label><div class="range-row"><input type="range" min="0" max="100" class="field-input range-input" data-key="${f.key}" value="${escapeHtml(value)}"><span class="range-val">${escapeHtml(value)}</span></div></div>`;
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><div class="range-row"><input type="range" min="0" max="100" class="field-input range-input" data-key="${f.key}" value="${escapeHtml(value)}"${f.readonly ? ' disabled' : ''}><span class="range-val">${escapeHtml(value)}</span></div></div>`;
     default:
       return '';
   }
@@ -1123,10 +1139,24 @@ function saveProfileData(event){
 
   profileState = nextProfileState;
   profileState.lastUpdatedAt = new Date().toISOString();
+
+  if(!allSettings.n2) allSettings.n2 = { fields: {} };
+  allSettings.n2.fields = {
+    ...(allSettings.n2.fields || {}),
+    resume: profileState.resumeFileName || '',
+    skills: Array.isArray(profileState.skills) ? profileState.skills.join(', ') : String(profileState.skills || '').trim(),
+    experience: profileState.experience || '',
+    preferredRoles: profileState.roles || '',
+    preferredLocations: profileState.preferredLocations || '',
+    resumeUploaded: profileState.resumeUploaded ? 'Yes' : 'No',
+    lastUpdatedAt: profileState.lastUpdatedAt ? formatDateTime(profileState.lastUpdatedAt) : ''
+  };
+
   saveProfileState();
   populateProfileForm();
   updateTopNavUser();
   renderProfileNodeCard();
+  if(selectedNodeId === 'n2') renderPanelContent('n2');
   showToast('Profile saved successfully', 'success');
   if(saveBtn){ flashButton(saveBtn, 'Saved ✓'); }
 }
