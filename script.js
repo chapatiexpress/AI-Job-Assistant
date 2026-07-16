@@ -1354,7 +1354,7 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
     await processRemainingWorkflowQueue(job.id);
     workflowRunning = false;
     if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-    return;
+    return 'skipped';
   }
 
   setJobExecutionState(job, 'applying');
@@ -1408,7 +1408,7 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
       workflowRunning = false;
       if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
       showToast('Workflow paused for manual action.', 'warning');
-      return;
+      return 'manual_action_needed';
     case 'Permanent Failure':
     case 'permanent_failure':
       await executeWorkflowNode(job, 'n16', 'permanent_failure', 'completed');
@@ -1434,6 +1434,7 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
   await processRemainingWorkflowQueue(job.id);
   workflowRunning = false;
   if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+  return submissionResult ? String(submissionResult).toLowerCase().replace(/ /g,'_') : 'completed';
 }
 
 async function runWorkflow(){
@@ -2817,8 +2818,16 @@ if(appsTableBodyEl){
         addActivity(`Application approved for ${app.jobTitle} at ${app.company}.`);
         addNotification('Application Approved', `${app.jobTitle} at ${app.company} is now being processed.`);
         renderNotifications();
-        showToast('Application approved and submitted.', 'success');
-        await resumeApprovalWorkflow(app, 'approve');
+        const result = await resumeApprovalWorkflow(app, 'approve');
+        if(result === 'success'){
+          showToast('Application submitted successfully.', 'success');
+        } else if(result === 'temporary_failure'){
+          showToast('Submission temporarily failed. It can be retried.', 'warning');
+        } else if(result === 'permanent_failure'){
+          showToast('Submission permanently failed.', 'error');
+        } else if(result === 'manual_action_needed'){
+          showToast('Submission requires manual action before completion.', 'warning');
+        }
       }
       return;
     }
