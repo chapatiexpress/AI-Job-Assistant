@@ -1117,6 +1117,199 @@ function persistApplication(job, status, extra = {}){
   return normalized;
 }
 
+function getWorkflowJobForApp(app){
+  return (appState.jobs || []).find(entry => entry.id === app.jobId) ||
+         (appState.jobs || []).find(entry => getWorkflowJobKey(entry) === app.workflowJobKey);
+}
+
+function findQueueEntryByJobId(jobId){
+  return Array.isArray(workflowState.queue) ? workflowState.queue.find(entry => entry.jobId === jobId) : undefined;
+}
+
+async function processRemainingWorkflowQueue(afterJobId){
+  const queue = Array.isArray(workflowState.queue) ? workflowState.queue : [];
+  const startIndex = queue.findIndex(entry => entry.jobId === afterJobId);
+  if(startIndex === -1) return;
+  const existingJobKeys = new Set(sampleApplications.map(a=>`${a.jobTitle}|${a.company}|${a.location}`));
+  const blacklistedCompanies = new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v=>v.toLowerCase()));
+  const dailyLimit = Number(profileState.dailyLimit) || 30;
+  let applicationsCount = 0;
+  let completedJobs = 0;
+  let waitingForNextScan = false;
+
+  for(let index = startIndex + 1; index < queue.length; index += 1){
+    const queueEntry = queue[index];
+    if(!queueEntry) continue;
+    const job = (appState.jobs || []).find(entry => entry.id === queueEntry.jobId) || (appState.jobs || []).find(entry => entry.workflowJobKey === queueEntry.workflowJobKey);
+    if(!job) continue;
+    if(queueEntry.status === 'completed'){
+      completedJobs += 1;
+      continue;
+    }
+
+    queueEntry.status = 'processing';
+    workflowState.currentJobId = job.id;
+    workflowState.currentStatus = 'processing';
+    workflowState.pauseReason = '';
+    saveAppState();
+
+    const jobKey = `${job.jobTitle || job.title}|${job.company}|${job.location}`;
+    const isAlreadyApplied = existingJobKeys.has(jobKey);
+    const isBlacklisted = blacklistedCompanies.has(String(job.company || '').toLowerCase());
+
+    await executeWorkflowNode(job, 'n10', 'checking_limits', (isAlreadyApplied || isBlacklisted) ? 'skipped' : 'completed');
+    if(isAlreadyApplied || isBlacklisted){
+      job.workflowStatus = 'Skipped';
+      job.workflowFinalStatus = 'skipped';
+      persistApplication(job, 'Skipped', {skipReason: isBlacklisted ? 'Blacklisted company' : 'Already applied', notes: 'Skipped because the company is blacklisted or already applied.'});
+      queueEntry.status = 'completed';
+      workflowState.currentStatus = 'completed';
+      saveAppState();
+      markWorkflowNodesSkipped(['d15','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
+      await executeWorkflowNode(job, 'skip', 'skipped', 'completed');
+      await executeWorkflowNode(job, 'n18', 'completed', 'completed');
+      completedJobs += 1;
+      continue;
+    }
+
+    await executeWorkflowNode(job, 'n11', 'preparing', 'completed');
+    await executeWorkflowNode(job, 'n12', 'preparing', 'completed');
+
+    const automationInfo = prepareApplicationPayload(job);
+    const manualReviewRequired = automationInfo.manualReviewRequired || !profileState.autoApply;
+    if(manualReviewRequired){
+      job.workflowStatus = 'Pending Review';
+      job.workflowFinalStatus = 'pending_review';
+      setJobExecutionState(job, 'pending_review');
+      await executeWorkflowNode(job, 'd13', 'pending_review', 'completed');
+      markWorkflowNodesSkipped(['n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
+      const application = persistApplication(job, 'Pending Review', {manualReviewRequired:true, coverLetter: profileState.autoCover ? createCoverLetter(job) : '', notes: automationInfo.notes});
+      queueEntry.status = 'waiting_manual_review';
+      workflowState.pauseReason = 'manual_review';
+      workflowState.currentStatus = 'paused';
+      workflowState.currentJobId = job.id;
+      workflowPauseContext = {jobId: job.id, appId: application.id};
+      addActivity(`Workflow paused for ${job.jobTitle || job.title} at ${job.company}.`);
+      addNotification('Pending Review', `${job.jobTitle || job.title} at ${job.company} is waiting for approval.`);
+      await executeWorkflowNode(job, 'pending', 'pending_review', 'pending');
+      workflowRunning = false;
+      setWorkflowState('paused', {pauseReason:'manual_review'});
+      if(document.querySelector('[data-action="run-workflow"]')){
+        const btn = document.querySelector('[data-action="run-workflow"]');
+        btn.disabled = false; btn.textContent = 'Run Workflow';
+      }
+      saveAppState();
+      return;
+    }
+
+    await executeWorkflowNode(job, 'd13', 'applying', 'skipped');
+    await executeWorkflowNode(job, 'n14', 'applying', 'completed');
+    await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
+
+    let outcome = null;
+    for(let attempt=0; attempt < 2; attempt += 1){
+      outcome = buildApplicationResult(job, attempt, profileState);
+      if(outcome === 'Temporary Failure' || outcome === 'temporary_failure'){
+        job.retryCount = (job.retryCount || 0) + 1;
+        if(attempt === 0){
+          continue;
+        }
+      }
+      break;
+    }
+    if(outcome === 'Temporary Failure' || outcome === 'temporary_failure'){
+      outcome = 'Temporary Failure';
+    }
+    const submissionResult = outcome;
+    applySubmissionResultVisuals(submissionResult.toLowerCase().replace(/ /g, '_'));
+
+    switch(submissionResult){
+      case 'Success':
+      case 'success':
+        job.workflowStatus = 'Success';
+        job.workflowFinalStatus = 'success';
+        persistApplication(job, 'Success', {confirmationMessage:'Application submitted successfully.', submittedAt:new Date().toISOString(), notes: automationInfo.notes, retryCount:(job.retryCount || 0)});
+        addActivity(`Application succeeded for ${job.jobTitle || job.title} at ${job.company}.`);
+        addNotification('Application Submitted', `${job.jobTitle || job.title} at ${job.company} was submitted successfully.`);
+        await executeWorkflowNode(job, 'n16', 'completed', 'completed');
+        await executeWorkflowNode(job, 'n17', 'completed', 'completed');
+        applicationsCount += 1;
+        existingJobKeys.add(jobKey);
+        await executeWorkflowNode(job, 'n18', 'completed', 'completed');
+        completedJobs += 1;
+        break;
+      case 'Temporary Failure':
+      case 'temporary_failure':
+        job.workflowStatus = 'Temporary Failure';
+        job.workflowFinalStatus = 'temporary_failure';
+        persistApplication(job, 'Temporary Failure', {failureReason:'Temporary failure during submission.', retryCount:(job.retryCount || 0) + 1, nextRetryAt:new Date().toISOString(), notes:'Temporary failure; another attempt will be scheduled.'});
+        addActivity(`Application temporarily failed for ${job.jobTitle || job.title} at ${job.company}.`);
+        addNotification('Temporary Failure', `${job.jobTitle || job.title} at ${job.company} needs another attempt.`);
+        await executeWorkflowNode(job, 'n16', 'completed', 'completed');
+        await executeWorkflowNode(job, 'n17', 'completed', 'completed');
+        applicationsCount += 1;
+        existingJobKeys.add(jobKey);
+        await executeWorkflowNode(job, 'n18', 'completed', 'completed');
+        completedJobs += 1;
+        break;
+      case 'Manual Action Needed':
+      case 'manual_action_needed':
+        job.workflowStatus = 'Manual Action Needed';
+        job.workflowFinalStatus = 'manual_action_needed';
+        const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'The application could not be submitted automatically.'});
+        workflowPauseContext = {jobId: job.id, appId: manualApp.id};
+        addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
+        addNotification('Pending Review', `${job.jobTitle || job.title} at ${job.company} needs user action.`);
+        await executeWorkflowNode(job, 'pending', 'manual_action_needed', 'pending');
+        workflowRunning = false;
+        setWorkflowState('paused', {pauseReason:'manual_review'});
+        if(document.querySelector('[data-action="run-workflow"]')){
+          const btn = document.querySelector('[data-action="run-workflow"]');
+          btn.disabled = false; btn.textContent = 'Run Workflow';
+        }
+        saveAppState();
+        return;
+      case 'Permanent Failure':
+      case 'permanent_failure':
+        job.workflowStatus = 'Permanent Failure';
+        job.workflowFinalStatus = 'permanent_failure';
+        persistApplication(job, 'Permanent Failure', {failureReason:'Permanent failure during submission.', notes:'The application could not be submitted due to a permanent issue.'});
+        addActivity(`Application permanently failed for ${job.jobTitle || job.title} at ${job.company}.`);
+        addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted.`);
+        await executeWorkflowNode(job, 'n16', 'completed', 'completed');
+        await executeWorkflowNode(job, 'n17', 'completed', 'completed');
+        applicationsCount += 1;
+        existingJobKeys.add(jobKey);
+        await executeWorkflowNode(job, 'n18', 'completed', 'completed');
+        completedJobs += 1;
+        break;
+      default:
+        throw new Error('Unknown submission result');
+    }
+    queueEntry.status = 'completed';
+    saveAppState();
+  }
+
+  if(completedJobs >= queue.length && !waitingForNextScan){
+    await executeWorkflowNode(null, 'n19', 'pending', 'pending');
+    addActivity('All current jobs processed. Waiting for the next scan.');
+    addNotification('Workflow Completed', 'All jobs were processed. The workflow is awaiting the next scan.');
+    waitingForNextScan = true;
+    scanWaiting = true;
+    workflowState.currentStatus = 'completed';
+    workflowState.pauseReason = 'completed';
+    saveAppState();
+  }
+
+  renderNotifications();
+  workflowRunning = false;
+  setWorkflowState(waitingForNextScan ? 'paused' : 'completed', waitingForNextScan ? {pauseReason:'next_scan'} : {});
+  if(document.querySelector('[data-action="run-workflow"]')){
+    const btn = document.querySelector('[data-action="run-workflow"]');
+    btn.disabled = false; btn.textContent = 'Run Workflow';
+  }
+}
+
 async function resumeApprovalWorkflow(app, decision = 'approve'){
   if(!app) return;
   if(workflowRunning) return;
@@ -1127,7 +1320,7 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if(runBtn){ runBtn.disabled=true; runBtn.textContent='Workflow Running...'; }
 
-  const job = (appState.jobs || []).find(entry => entry.id === app.jobId) || (appState.jobs || []).find(entry => getWorkflowJobKey(entry) === app.workflowJobKey);
+  const job = getWorkflowJobForApp(app);
   if(!job){
     workflowRunning = false;
     setWorkflowState('paused', {pauseReason:'job_missing'});
@@ -1136,11 +1329,37 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
     return;
   }
 
+  const queueEntry = findQueueEntryByJobId(job.id);
+  if(queueEntry) queueEntry.status = 'processing';
+  workflowState.currentJobId = job.id;
+  workflowState.currentStatus = 'processing';
+  workflowState.pauseReason = '';
+  saveAppState();
+
+  if(decision === 'reject'){
+    job.workflowStatus = 'Skipped';
+    job.workflowFinalStatus = 'skipped';
+    persistApplication(job, 'Skipped', {skipReason:'Rejected by user', failureReason:'Rejected manually and skipped.', notes:'Rejected manually and skipped.', manualReviewRequired:false});
+    if(queueEntry) queueEntry.status = 'completed';
+    workflowPauseContext = null;
+    renderApplicationsTable();
+    renderDashboard();
+    renderAnalytics();
+    addActivity(`Application rejected for ${job.jobTitle} at ${job.company}.`);
+    addNotification('Application Rejected', `${job.jobTitle} at ${job.company} was rejected and skipped.`);
+    renderNotifications();
+    showToast('Application rejected and skipped.', 'info');
+    await processRemainingWorkflowQueue(job.id);
+    workflowRunning = false;
+    if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+    return;
+  }
+
   setJobExecutionState(job, 'applying');
   await executeWorkflowNode(job, 'n14', 'applying', 'completed');
   await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
 
-  const submissionResult = decision === 'approve' ? buildApplicationResult(job, (app.retryCount || 0), profileState) : 'Manual Action Needed';
+  const submissionResult = buildApplicationResult(job, (app.retryCount || 0), profileState);
   applySubmissionResultVisuals(submissionResult);
 
   switch(submissionResult){
@@ -1162,10 +1381,23 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
       break;
     case 'Manual Action Needed':
     case 'manual_action_needed':
-      persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'Manual review required before submission.'});
+      job.workflowStatus = 'Manual Action Needed';
+      job.workflowFinalStatus = 'manual_action_needed';
+      const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'Manual action required before submission.'});
+      workflowPauseContext = {jobId: job.id, appId: manualApp.id};
+      workflowState.currentStatus = 'paused';
+      workflowState.pauseReason = 'manual_review';
+      setWorkflowState('paused', {pauseReason:'manual_review'});
       addActivity(`Manual action required for ${job.jobTitle} at ${job.company}.`);
-      addNotification('Pending Review', `${job.jobTitle} at ${job.company} is waiting for approval.`);
-      break;
+      addNotification('Pending Review', `${job.jobTitle} at ${job.company} needs user action.`);
+      renderApplicationsTable();
+      renderDashboard();
+      renderAnalytics();
+      renderNotifications();
+      workflowRunning = false;
+      if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+      showToast('Workflow paused for manual action.', 'warning');
+      return;
     case 'Permanent Failure':
     case 'permanent_failure':
       await executeWorkflowNode(job, 'n16', 'permanent_failure', 'completed');
@@ -1178,13 +1410,19 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
       throw new Error('Unknown submission result');
   }
 
-  setJobExecutionState(job, 'completed');
+  if(queueEntry) queueEntry.status = 'completed';
+  workflowState.currentStatus = 'completed';
+  workflowState.pauseReason = '';
   workflowPauseContext = null;
-  workflowRunning = false;
-  setWorkflowState('idle');
-  if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+  saveAppState();
+  renderApplicationsTable();
+  renderDashboard();
+  renderAnalytics();
   renderNotifications();
-  showToast('Workflow resumed for the selected job.', 'success');
+
+  await processRemainingWorkflowQueue(job.id);
+  workflowRunning = false;
+  if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
 }
 
 async function runWorkflow(){
@@ -2554,26 +2792,22 @@ if(appsLoadMoreBtnEl) appsLoadMoreBtnEl.addEventListener('click', loadMoreApplic
 /* single delegated listener for the "View" action button in the applications table */
 const appsTableBodyEl = document.getElementById('appsTableBody');
 if(appsTableBodyEl){
-  appsTableBodyEl.addEventListener('click', (e)=>{
+  appsTableBodyEl.addEventListener('click', async (e)=>{
     const approveBtn = e.target.closest('[data-action="approve-application"]');
     if(approveBtn){
       const id = Number(approveBtn.dataset.appId);
       const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===id));
       if(app && app.status === 'Pending Review'){
-        app.status = 'Approved';
-        app.manualReviewRequired = false;
         app.notes = 'Approved for submission.';
         saveAppState();
         renderApplicationsTable();
         renderDashboard();
         renderAnalytics();
         addActivity(`Application approved for ${app.jobTitle} at ${app.company}.`);
-        addNotification('Application Approved', `${app.jobTitle} at ${app.company} is now submitted.`);
+        addNotification('Application Approved', `${app.jobTitle} at ${app.company} is now being processed.`);
         renderNotifications();
         showToast('Application approved and submitted.', 'success');
-        if(!workflowRunning){
-          resumeApprovalWorkflow(app, 'approve');
-        }
+        await resumeApprovalWorkflow(app, 'approve');
       }
       return;
     }
@@ -2582,17 +2816,33 @@ if(appsTableBodyEl){
       const id = Number(rejectBtn.dataset.appId);
       const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===id));
       if(app && app.status === 'Pending Review'){
-        app.status = 'Rejected';
-        app.manualReviewRequired = false;
-        app.notes = 'Rejected manually and skipped.';
-        saveAppState();
-        renderApplicationsTable();
-        renderDashboard();
-        renderAnalytics();
-        addActivity(`Application rejected for ${app.jobTitle} at ${app.company}.`);
-        addNotification('Application Rejected', `${app.jobTitle} at ${app.company} was rejected and skipped.`);
-        renderNotifications();
-        showToast('Application rejected and skipped.', 'info');
+        const job = getWorkflowJobForApp(app);
+        if(job){
+          persistApplication(job, 'Skipped', {skipReason:'Rejected by user', failureReason:'Rejected manually and skipped.', notes:'Rejected manually and skipped.', manualReviewRequired:false});
+          const queueEntry = findQueueEntryByJobId(job.id);
+          if(queueEntry) queueEntry.status = 'completed';
+          workflowState.currentStatus = 'processing';
+          saveAppState();
+          renderApplicationsTable();
+          renderDashboard();
+          renderAnalytics();
+          addActivity(`Application rejected for ${app.jobTitle} at ${app.company}.`);
+          addNotification('Application Rejected', `${app.jobTitle} at ${app.company} was rejected and skipped.`);
+          renderNotifications();
+          showToast('Application rejected and skipped.', 'info');
+          workflowPauseContext = null;
+          await processRemainingWorkflowQueue(job.id);
+        } else {
+          app.notes = 'Rejected manually and skipped.';
+          persistApplication(app, 'Skipped', {skipReason:'Rejected by user', failureReason:'Rejected manually and skipped.', notes:'Rejected manually and skipped.', manualReviewRequired:false});
+          renderApplicationsTable();
+          renderDashboard();
+          renderAnalytics();
+          addActivity(`Application rejected for ${app.jobTitle} at ${app.company}.`);
+          addNotification('Application Rejected', `${app.jobTitle} at ${app.company} was rejected and skipped.`);
+          renderNotifications();
+          showToast('Application rejected and skipped.', 'info');
+        }
       }
       return;
     }
