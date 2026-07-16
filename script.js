@@ -761,16 +761,18 @@ function createCoverLetter(job){
   return `Dear Hiring Team,\n\nI am excited to apply for the ${job.jobTitle} role at ${job.company}. With my experience in ${normalizeArrayString(profileState.skills).join(', ')}, I am confident I can contribute to your team.\n\nBest regards,\n${profileState.firstName}`;
 }
 
-function buildApplicationResult(job){
+function simulateSubmissionResult(job){
   const autoApply = profileState.autoApply !== false;
-  const baseScore = job.matchScore;
-  if(!autoApply) return 'Pending Review';
-  const random = Math.random();
-  if(baseScore >= 90 && random > 0.2) return 'Success';
-  if(random < 0.12) return 'Temporary Failure';
-  if(random < 0.2) return 'Manual Review';
-  if(random < 0.28) return 'Permanent Failure';
-  return 'Success';
+  if(!autoApply) return {status:'Pending Review'};
+  const r = Math.random();
+  if(r < 0.5) return {status:'Success'};
+  if(r < 0.7) return {status:'Temporary Failure'};
+  if(r < 0.9) return {status:'Manual Action Needed'};
+  return {status:'Permanent Failure'};
+}
+
+function buildApplicationResult(job){
+  return simulateSubmissionResult(job).status;
 }
 
 async function highlightNode(id, status='completed', duration=900){
@@ -932,10 +934,18 @@ async function runWorkflow(){
     return;
   }
 
-  await highlightNode('d13', 'skipped');
-  const createdApps = limitedJobs.map(job=>{
+  await highlightNode('d15', limitedJobs.length ? 'completed' : 'skipped');
+  const createdApps = [];
+  const branchMap = {
+    'Success': {node:'success', store:'st-success', color:'#16a34a'},
+    'Temporary Failure': {node:'tempfail', store:'st-temp', color:'#ea580c'},
+    'Manual Action Needed': {node:'manual', store:'st-manual', color:'#2563eb'},
+    'Permanent Failure': {node:'permfail', store:'st-perm', color:'#dc2626'},
+  };
+
+  for(const job of limitedJobs){
     const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
-    const status = buildApplicationResult(job);
+    const result = simulateSubmissionResult(job);
     const application = {
       id: nextId,
       jobTitle: job.jobTitle,
@@ -944,17 +954,41 @@ async function runWorkflow(){
       source: job.source,
       matchScore: job.matchScore,
       date: new Date().toISOString().slice(0,10),
-      status,
+      status: result.status,
       coverLetter: profileState.autoCover ? createCoverLetter(job) : '',
-      demo:true
+      submittedAt: new Date().toISOString(),
+      demo:true,
+      ...(result.status === 'Success' ? {confirmation:'Application submitted successfully.'} : {}),
+      ...(result.status === 'Temporary Failure' ? {
+        failureReason:'Temporary network or service error',
+        retryCount:1,
+        nextRetryAt:new Date(Date.now()+24*60*60*1000).toISOString().slice(0,10)
+      } : {}),
+      ...(result.status === 'Manual Action Needed' ? {
+        manualActionRequired:true,
+        pendingDetails:'User approval is needed before completion.'
+      } : {}),
+      ...(result.status === 'Permanent Failure' ? {
+        failureReason:'Application blocked by provider policy',
+        failedAt:new Date().toISOString()
+      } : {}),
     };
     appState.settings.nextApplicationId = nextId + 1;
-    return application;
-  });
+    createdApps.push(application);
+
+    const branch = branchMap[result.status];
+    if(branch){
+      highlightConnector('d15', branch.node, branch.color);
+      await highlightNode(branch.node, 'completed');
+      await highlightNode(branch.store, 'completed');
+    }
+  }
+
   if(createdApps.length){
     sampleApplications.unshift(...createdApps);
     saveAppState();
   }
+
   await highlightNode('n14', createdApps.length ? 'completed' : 'skipped');
 
   renderApplicationsTable();
@@ -1805,11 +1839,12 @@ panel.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let c
 const STATUS_META = {
   'Success':            {cls:'status-success',  icon:'✔'},
   'Pending Review':     {cls:'status-pending',  icon:'⏳'},
+  'Manual Action Needed': {cls:'status-pending', icon:'🛠'},
   'Temporary Failure':  {cls:'status-tempfail',  icon:'⏱'},
   'Permanent Failure':  {cls:'status-permfail',  icon:'✕'},
   'Skipped':            {cls:'status-skipped',   icon:'⏭'},
 };
-const STATUS_ORDER = ['Success','Pending Review','Temporary Failure','Permanent Failure','Skipped'];
+const STATUS_ORDER = ['Success','Pending Review','Manual Action Needed','Temporary Failure','Permanent Failure','Skipped'];
 
 function formatSampleDate(dateStr){
   const d = new Date(dateStr+'T00:00:00');
@@ -1828,7 +1863,7 @@ function computeDashboardStats(){
     jobsMatched: (appState.jobs || []).filter(j=>j.matched).length,
     jobsSkipped: skippedJobs.length,
     applicationsSent: sampleApplications.length,
-    pendingReviews: sampleApplications.filter(a=>a.status==='Pending Review').length,
+    pendingReviews: sampleApplications.filter(a=>a.status==='Pending Review' || a.status==='Manual Action Needed').length,
     successful: sampleApplications.filter(a=>a.status==='Success').length,
     failed: sampleApplications.filter(a=>a.status==='Temporary Failure' || a.status==='Permanent Failure').length,
   };
@@ -1944,15 +1979,18 @@ function renderApplicationsTable(){
   tbody.innerHTML = filtered.map(a=>{
     const meta = STATUS_META[a.status] || {cls:'',icon:''};
     const approveButton = a.status === 'Pending Review' ? `<button type="button" class="apps-action-btn" data-action="approve-application" data-app-id="${a.id}">Approve</button>` : '';
+  const continueButton = a.status === 'Manual Action Needed' ? `<button type="button" class="apps-action-btn" data-action="approve-application" data-app-id="${a.id}">Continue</button>` : '';
+  const retryButton = a.status === 'Temporary Failure' ? `<button type="button" class="apps-action-btn" data-action="retry-application" data-app-id="${a.id}">Retry</button>` : '';
+  const detailsLine = a.failureReason ? `<div class="app-detail">${escapeHtml(a.failureReason)}</div>` : a.pendingDetails ? `<div class="app-detail">${escapeHtml(a.pendingDetails)}</div>` : a.nextRetryAt ? `<div class="app-detail">Retry at ${escapeHtml(a.nextRetryAt)}</div>` : a.confirmation ? `<div class="app-detail">${escapeHtml(a.confirmation)}</div>` : '';
     return `<tr>
-      <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
+      <td data-label="Job Title">${escapeHtml(a.jobTitle)}${detailsLine}</td>
       <td data-label="Company">${escapeHtml(a.company)}</td>
       <td data-label="Match Score"><span class="match-score-pill">${a.matchScore}%</span></td>
       <td data-label="Date">${escapeHtml(formatSampleDate(a.date))}</td>
       <td data-label="Status"><span class="status-badge ${meta.cls}">${meta.icon} ${escapeHtml(a.status)}</span></td>
       <td data-label="Action">
-        <button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button>
-        ${approveButton}
+        <button type="button" class="apps-action-btn" data-action="view-application" data-app-id="${a.id}">View</button>
+        ${approveButton}${continueButton}${retryButton}
       </td>
     </tr>`;
   }).join('');
@@ -2033,9 +2071,11 @@ if(appsTableBodyEl){
     if(approveBtn){
       const id = Number(approveBtn.dataset.appId);
       const app = sampleApplications.find(a=>a.id===id);
-      if(app && app.status === 'Pending Review'){
+      if(app && (app.status === 'Pending Review' || app.status === 'Manual Action Needed')){
         app.status = 'Submitted';
         app.manualReviewRequired = false;
+        app.manualActionRequired = false;
+        app.approvedAt = new Date().toISOString();
         saveAppState();
         renderApplicationsTable();
         renderDashboard();
@@ -2044,6 +2084,24 @@ if(appsTableBodyEl){
         addNotification('Application Approved', `${app.jobTitle} at ${app.company} is now submitted.`);
         renderNotifications();
         showToast('Application approved and submitted.', 'success');
+      }
+      return;
+    }
+    const retryBtn = e.target.closest('[data-action="retry-application"]');
+    if(retryBtn){
+      const id = Number(retryBtn.dataset.appId);
+      const app = sampleApplications.find(a=>a.id===id);
+      if(app && app.status === 'Temporary Failure'){
+        app.retryCount = (app.retryCount || 0) + 1;
+        app.nextRetryAt = new Date(Date.now()+24*60*60*1000).toISOString().slice(0,10);
+        saveAppState();
+        renderApplicationsTable();
+        renderDashboard();
+        renderAnalytics();
+        addActivity(`Retry scheduled for ${app.jobTitle} at ${app.company}.`);
+        addNotification('Retry Scheduled', `${app.jobTitle} is scheduled to retry on ${app.nextRetryAt}.`);
+        renderNotifications();
+        showToast('Retry scheduled.', 'success');
       }
       return;
     }
