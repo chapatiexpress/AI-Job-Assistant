@@ -408,6 +408,7 @@ const DEFAULT_APP_STATE = {
   activity:[],
   jobs:[],
   applications:[],
+  skippedJobs:[],
   settings:{nextJobId:101,nextApplicationId:1,pageSize:8,demoMode:false}
 };
 
@@ -423,6 +424,7 @@ function loadAppState(){
         activity: Array.isArray(cleaned.activity)?cleaned.activity:DEFAULT_APP_STATE.activity.slice(),
         jobs: Array.isArray(cleaned.jobs)?cleaned.jobs:DEFAULT_APP_STATE.jobs.slice(),
         applications: Array.isArray(cleaned.applications)?cleaned.applications:DEFAULT_APP_STATE.applications.slice(),
+        skippedJobs: Array.isArray(cleaned.skippedJobs)?cleaned.skippedJobs:DEFAULT_APP_STATE.skippedJobs.slice(),
         settings:{...DEFAULT_APP_STATE.settings, ...(cleaned.settings||{})}
       };
     }
@@ -445,6 +447,9 @@ function cleanDemoData(state){
   if(Array.isArray(cleaned.applications)){
     cleaned.applications = cleaned.applications.filter(a=> !a || a.demo !== true && !(typeof a.id === 'string' && a.id.startsWith('demo-')));
   }
+  if(Array.isArray(cleaned.skippedJobs)){
+    cleaned.skippedJobs = cleaned.skippedJobs.filter(a=> !a || a.demo !== true && !(typeof a.id === 'string' && a.id.startsWith('demo-')));
+  }
   return cleaned;
 }
 
@@ -453,6 +458,7 @@ function saveAppState(){
   appState.workflowSettings = allSettings;
   appState.jobs = jobsData;
   appState.applications = sampleApplications;
+  appState.skippedJobs = skippedJobs;
   localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState));
 }
 
@@ -644,14 +650,6 @@ function applyWorkflowNodeStyle(id, status){
   node.el.style.boxShadow = `0 0 0 10px ${color}33`;
 }
 
-function clearWorkflowNodeStyles(){
-  Object.values(nodeState).forEach(n=>{
-    if(!n.el) return;
-    n.el.style.borderColor = '';
-    n.el.style.boxShadow = '';
-  });
-}
-
 function validateProfileForWorkflow(){
   const missing = [];
   if(!profileState.resumeUploaded) missing.push('Resume upload');
@@ -785,6 +783,29 @@ async function highlightNode(id, status='completed', duration=900){
   applyWorkflowNodeStyle(id,status);
 }
 
+function highlightConnector(from, to, color){
+  const index = connectors.findIndex(c=>c.from===from && c.to===to);
+  if(index === -1 || !connEls[index]) return;
+  connEls[index].setAttribute('stroke', color || '#16a34a');
+  connEls[index].setAttribute('stroke-width','4');
+}
+
+function clearWorkflowNodeStyles(){
+  Object.values(nodeState).forEach(n=>{
+    if(!n.el) return;
+    n.el.style.borderColor = '';
+    n.el.style.boxShadow = '';
+  });
+  connEls.forEach(p=>{
+    if(!p) return;
+    const idx = connEls.indexOf(p);
+    if(idx >= 0){
+      p.setAttribute('stroke', connectors[idx].color);
+      p.setAttribute('stroke-width','2.2');
+    }
+  });
+}
+
 async function runWorkflow(){
   if(workflowRunning) return;
   workflowRunning = true;
@@ -827,26 +848,46 @@ async function runWorkflow(){
   await highlightNode('n5');
   await highlightNode('n6');
 
-  await highlightNode('d7', jobsData.some(job=>job.matched) ? 'completed' : 'pending');
+  const threshold = Number(profileState.minMatchScore || 75);
+  const matchedJobs = jobsData.filter(job=>job.matchScore >= threshold);
+  const skipped = jobsData.filter(job=>job.matchScore < threshold).map(job=>({
+    id: job.id || `skip-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    jobTitle: job.jobTitle,
+    company: job.company,
+    source: job.source,
+    location: job.location,
+    matchScore: job.matchScore,
+    requiredScore: threshold,
+    status: 'Skipped',
+    skipReason: 'Match score below threshold',
+    skippedAt: new Date().toISOString().slice(0,10),
+    date: new Date().toISOString().slice(0,10),
+    demo:true
+  }));
+  if(skipped.length){
+    skippedJobs.unshift(...skipped);
+    saveAppState();
+    addActivity(`${skipped.length} jobs were skipped due to low match score.`);
+    addNotification('Jobs Skipped', `${skipped.length} jobs were skipped because they did not meet the threshold.`);
+  }
 
-  let filteredJobs = jobsData.filter(job=>job.matched);
-  filteredJobs = applyPreferenceFilters(filteredJobs);
+  await highlightNode('d7', matchedJobs.length ? 'completed' : 'pending');
+  if(skipped.length){
+    await highlightConnector('d7','skip','red');
+    await highlightNode('skip', 'completed');
+    await highlightNode('n18', 'completed');
+  }
+
+  let filteredJobs = applyPreferenceFilters(matchedJobs);
   jobsData = filteredJobs;
   appState.jobs = jobsData;
   saveAppState();
   await highlightNode('n8', filteredJobs.length ? 'completed' : 'skipped');
 
   const existingJobKeys = new Set(sampleApplications.map(a=>`${a.jobTitle}|${a.company}|${a.location}`));
-  filteredJobs = filteredJobs.filter(job=>!existingJobKeys.has(`${job.jobTitle}|${job.company}|${job.location}`));
-  jobsData = filteredJobs;
-  appState.jobs = jobsData;
-  saveAppState();
-  await highlightNode('n9', filteredJobs.length ? 'completed' : 'skipped');
-
-  const limitedJobs = enforceDailyLimit(filteredJobs);
-  jobsData = limitedJobs;
-  appState.jobs = jobsData;
-  saveAppState();
+  const dedupedFilteredJobs = filteredJobs.filter(job=>!existingJobKeys.has(`${job.jobTitle}|${job.company}|${job.location}`));
+  const limitedJobs = enforceDailyLimit(dedupedFilteredJobs);
+  await highlightNode('n9', dedupedFilteredJobs.length ? 'completed' : 'skipped');
   await highlightNode('n10', limitedJobs.length ? 'completed' : 'skipped');
 
   await highlightNode('n11', profileState.autoCover ? 'completed' : 'skipped');
@@ -935,8 +976,10 @@ async function runWorkflow(){
 function resetDemoData(){
   jobsData = [];
   sampleApplications = [];
+  skippedJobs = [];
   appState.jobs = [];
   appState.applications = [];
+  appState.skippedJobs = [];
   appState.notifications = [];
   appState.activity = [];
   saveAppState();
@@ -968,6 +1011,7 @@ let appState = loadAppState();
 let allSettings = appState.workflowSettings || {};
 let profileState = appState.profile || {};
 let sampleApplications = appState.applications || [];
+let skippedJobs = appState.skippedJobs || [];
 let jobsData = appState.jobs || [];
 
 /* per-card-type field definitions (beyond the universal Name/Description/Status/Enable Step) */
@@ -1763,8 +1807,9 @@ const STATUS_META = {
   'Pending Review':     {cls:'status-pending',  icon:'⏳'},
   'Temporary Failure':  {cls:'status-tempfail',  icon:'⏱'},
   'Permanent Failure':  {cls:'status-permfail',  icon:'✕'},
+  'Skipped':            {cls:'status-skipped',   icon:'⏭'},
 };
-const STATUS_ORDER = ['Success','Pending Review','Temporary Failure','Permanent Failure'];
+const STATUS_ORDER = ['Success','Pending Review','Temporary Failure','Permanent Failure','Skipped'];
 
 function formatSampleDate(dateStr){
   const d = new Date(dateStr+'T00:00:00');
@@ -1781,6 +1826,7 @@ function computeDashboardStats(){
   return {
     totalJobsFound: (appState.jobs || []).length,
     jobsMatched: (appState.jobs || []).filter(j=>j.matched).length,
+    jobsSkipped: skippedJobs.length,
     applicationsSent: sampleApplications.length,
     pendingReviews: sampleApplications.filter(a=>a.status==='Pending Review').length,
     successful: sampleApplications.filter(a=>a.status==='Success').length,
@@ -1789,12 +1835,13 @@ function computeDashboardStats(){
 }
 
 function buildStatusBarsHtml(){
-  if(sampleApplications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
-  const total = sampleApplications.length;
+  const allApps = [...sampleApplications, ...skippedJobs];
+  if(allApps.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
+  const total = allApps.length;
   return STATUS_ORDER.map(status=>{
-    const count = sampleApplications.filter(a=>a.status===status).length;
+    const count = allApps.filter(a=>a.status===status).length;
     const pct = total ? Math.round((count/total)*100) : 0;
-    const meta = STATUS_META[status];
+    const meta = STATUS_META[status] || {cls:'',icon:''};
     return `<div class="bar-row">
       <div class="bar-label">${escapeHtml(status)}</div>
       <div class="bar-track"><div class="bar-fill ${meta.cls}" style="width:${pct}%"></div></div>
@@ -1804,11 +1851,12 @@ function buildStatusBarsHtml(){
 }
 
 function buildSourceBarsHtml(){
-  if(sampleApplications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
-  const total = sampleApplications.length;
-  const sources = [...new Set(sampleApplications.map(a=>a.source))];
+  const allApps = [...sampleApplications, ...skippedJobs];
+  if(allApps.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
+  const total = allApps.length;
+  const sources = [...new Set(allApps.map(a=>a.source))];
   return sources.map(source=>{
-    const count = sampleApplications.filter(a=>a.source===source).length;
+    const count = allApps.filter(a=>a.source===source).length;
     const pct = total ? Math.round((count/total)*100) : 0;
     return `<div class="bar-row">
       <div class="bar-label">${escapeHtml(source)}</div>
@@ -1825,6 +1873,7 @@ function renderDashboard(){
   const cards = [
     {label:'Total Jobs Found',           value:stats.totalJobsFound, icon:'📄', color:'#334155'},
     {label:'Jobs Matched',               value:stats.jobsMatched,    icon:'🎯', color:'#7c3aed'},
+    {label:'Jobs Skipped',               value:stats.jobsSkipped,   icon:'⏭', color:'#f59e0b'},
     {label:'Applications Sent',          value:stats.applicationsSent, icon:'📤', color:'#2563eb'},
     {label:'Pending Reviews',            value:stats.pendingReviews, icon:'⏳', color:'#ea580c'},
     {label:'Successful Applications',    value:stats.successful,     icon:'✅', color:'#16a34a'},
@@ -1875,7 +1924,8 @@ function renderApplicationsTable(){
   const sortBy = (appsSortByEl && appsSortByEl.value) || 'date';
   const sortOrder = (appsSortOrderEl && appsSortOrderEl.value) || 'desc';
 
-  const filtered = sampleApplications.filter(a=>{
+  const sourceData = statusFilter === 'Skipped' ? skippedJobs : sampleApplications;
+  const filtered = sourceData.filter(a=>{
     const matchesQuery = !query || a.jobTitle.toLowerCase().includes(query) || a.company.toLowerCase().includes(query);
     const matchesStatus = statusFilter === 'All' || a.status === statusFilter;
     const matchesSource = sourceFilter === 'All' || a.source === sourceFilter;
@@ -1908,8 +1958,8 @@ function renderApplicationsTable(){
   }).join('');
 
   if(emptyState){
-    if(sampleApplications.length === 0){
-      emptyState.textContent = 'No applications yet. Applications will appear here after you submit a job application.';
+    if(sourceData.length === 0){
+      emptyState.textContent = statusFilter === 'Skipped' ? 'No skipped jobs yet. Skipped jobs appear when a job falls below match score threshold.' : 'No applications yet. Applications will appear here after you submit a job application.';
     } else {
       emptyState.textContent = 'No applications match your search or filter.';
     }
@@ -1920,17 +1970,22 @@ function renderApplicationsTable(){
 function renderAnalytics(){
   const grid = document.getElementById('analyticsStatsGrid');
   if(!grid) return;
-  const total = sampleApplications.length;
+  const totalApps = sampleApplications.length;
   const successCount = sampleApplications.filter(a=>a.status==='Success').length;
-  const successRate = total ? Math.round((successCount/total)*100) : 0;
-  const avgMatch = total ? Math.round(sampleApplications.reduce((sum,a)=>sum+a.matchScore,0)/total) : 0;
+  const successRate = totalApps ? Math.round((successCount/totalApps)*100) : 0;
+  const avgMatch = totalApps ? Math.round(sampleApplications.reduce((sum,a)=>sum+a.matchScore,0)/totalApps) : 0;
   const thisWeek = sampleApplications.filter(a=>daysSince(a.date) <= 7).length;
+  const totalSkipped = skippedJobs.length;
+  const totalFound = (appState.jobs || []).length;
+  const skipRate = totalFound ? Math.round((totalSkipped/totalFound)*100) : 0;
+  const avgSkipped = totalSkipped ? Math.round(skippedJobs.reduce((sum,s)=>sum+s.matchScore,0)/totalSkipped) : 0;
 
   const cards = [
-    {label:'Total Applications',        value:total,          icon:'📤', color:'#2563eb'},
+    {label:'Total Applications',        value:totalApps,          icon:'📤', color:'#2563eb'},
     {label:'Success Rate',              value:successRate+'%', icon:'✅', color:'#16a34a'},
     {label:'Avg Match Score',           value:avgMatch+'%',    icon:'🎯', color:'#7c3aed'},
     {label:'Applications This Week',    value:thisWeek,        icon:'📅', color:'#ea580c'},
+    {label:'Skipped Jobs',              value:totalSkipped,      icon:'⏭', color:'#f59e0b'},
   ];
   grid.innerHTML = cards.map(c=>`
     <div class="dash-card">
@@ -1948,10 +2003,10 @@ function renderAnalytics(){
 
   const summaryEl = document.getElementById('analyticsSummaryText');
   if(summaryEl){
-    if(total === 0){
+    if(totalApps === 0 && totalSkipped === 0){
       summaryEl.textContent = 'Analytics will appear after application activity is recorded.';
     } else {
-      summaryEl.textContent = `In the current dataset, ${total} applications were sent with a ${successRate}% success rate and an average match score of ${avgMatch}%. ${thisWeek} application${thisWeek===1?'':'s'} went out in the last 7 days.`;
+      summaryEl.textContent = `In the current dataset, ${totalApps} applications were sent with a ${successRate}% success rate and an average match score of ${avgMatch}%. ${totalSkipped} jobs were skipped (${skipRate}% skip rate) with an average skipped score of ${avgSkipped}%. ${thisWeek} application${thisWeek===1?'':'s'} went out in the last 7 days.`;
     }
   }
 }
