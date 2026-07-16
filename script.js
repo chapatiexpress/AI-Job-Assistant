@@ -910,6 +910,10 @@ function formatDateTime(iso){
   return date.toLocaleString(undefined, {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 }
 
+function isValidEmail(email){
+  return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 function getSkillsFromTags(){
   return Array.from(profileFields.skillsTags.querySelectorAll('.tag-pill')).map(tag=>tag.dataset.value).filter(Boolean);
 }
@@ -1051,15 +1055,34 @@ function collectProfileState(){
   };
 }
 
-function saveProfileData(){
-  profileState = collectProfileState();
+function saveProfileData(event){
+  const saveBtn = event && event.currentTarget ? event.currentTarget : document.getElementById('saveProfileBtnBottom') || document.getElementById('saveProfileBtn');
+  const nextProfileState = collectProfileState();
+  if(!nextProfileState.firstName){
+    showToast('First Name is required.', 'error');
+    return;
+  }
+  if(nextProfileState.email && !isValidEmail(nextProfileState.email)){
+    showToast('Please enter a valid email address.', 'error');
+    return;
+  }
+  if(Number.isNaN(nextProfileState.minMatchScore) || nextProfileState.minMatchScore < 0 || nextProfileState.minMatchScore > 100){
+    showToast('Minimum Match Score must be between 0 and 100.', 'error');
+    return;
+  }
+  if(Number.isNaN(nextProfileState.dailyLimit) || nextProfileState.dailyLimit < 1){
+    showToast('Daily Application Limit must be at least 1.', 'error');
+    return;
+  }
+
+  profileState = nextProfileState;
   profileState.lastUpdatedAt = new Date().toISOString();
   saveProfileState();
-  updateResumeStatus();
-  updateProfileHeader();
+  populateProfileForm();
   updateTopNavUser();
   renderProfileNodeCard();
-  flashButton(document.querySelector('#saveProfileBtn'), 'Saved ✓');
+  showToast('Profile saved successfully', 'success');
+  if(saveBtn){ flashButton(saveBtn, 'Saved ✓'); }
 }
 
 function autoSaveProfileData(){
@@ -1141,7 +1164,11 @@ document.getElementById('replaceResumeBtn').addEventListener('click', ()=>profil
 document.getElementById('downloadResumeBtn').addEventListener('click', downloadResume);
 document.getElementById('deleteResumeBtn').addEventListener('click', deleteResume);
 document.getElementById('changePhotoBtn').addEventListener('click', ()=>profileFields.photoFileInput.click());
-document.querySelectorAll('#saveProfileBtn,#saveProfileBtnBottom').forEach(btn=>btn.addEventListener('click', saveProfileData));
+const profileSaveButtons = [
+  document.getElementById('saveProfileBtn'),
+  document.getElementById('saveProfileBtnBottom')
+].filter(Boolean);
+profileSaveButtons.forEach(btn => btn.addEventListener('click', saveProfileData));
 
 profileFields.skillsInput.addEventListener('keydown', (e)=>{
   if(e.key !== 'Enter') return;
