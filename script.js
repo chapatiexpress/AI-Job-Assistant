@@ -623,6 +623,293 @@ function runDemoScan(){
   showToast('Demo scan completed.');
 }
 
+function delay(ms){
+  return new Promise(resolve=>setTimeout(resolve, ms));
+}
+
+const WORKFLOW_SEQUENCE = ['n1','n2','n3','n4','n5','n6','d7','n8','n9','n10','n11','n12','n14','n16','n17'];
+const WORKFLOW_STATUS_COLOR = {
+  completed:'#16a34a',
+  pending:'#ea580c',
+  failed:'#dc2626',
+  skipped:'#2563eb'
+};
+let workflowRunning = false;
+
+function applyWorkflowNodeStyle(id, status){
+  const node = nodeState[id];
+  if(!node || !node.el) return;
+  const color = WORKFLOW_STATUS_COLOR[status] || node.color || '#2563eb';
+  node.el.style.borderColor = color;
+  node.el.style.boxShadow = `0 0 0 10px ${color}33`;
+}
+
+function clearWorkflowNodeStyles(){
+  Object.values(nodeState).forEach(n=>{
+    if(!n.el) return;
+    n.el.style.borderColor = '';
+    n.el.style.boxShadow = '';
+  });
+}
+
+function validateProfileForWorkflow(){
+  const missing = [];
+  if(!profileState.resumeUploaded) missing.push('Resume upload');
+  if(!profileState.firstName) missing.push('Name');
+  const skills = Array.isArray(profileState.skills) ? profileState.skills.filter(Boolean) : String(profileState.skills||'').split(',').map(s=>s.trim()).filter(Boolean);
+  if(skills.length === 0) missing.push('Skills');
+  if(!profileState.roles) missing.push('Preferred Roles');
+  if(!profileState.preferredLocations) missing.push('Preferred Locations');
+  if(missing.length){
+    showToast(`Cannot run workflow. Missing: ${missing.join(', ')}`, 'error');
+    setActivePage('workflow');
+    selectNode('n2');
+    applyWorkflowNodeStyle('n2','failed');
+    return false;
+  }
+  return true;
+}
+
+function normalizeArrayString(value){
+  return String(value||'').split(',').map(v=>v.trim()).filter(Boolean);
+}
+
+function computeJobMatchScore(job){
+  const skills = Array.isArray(profileState.skills) ? profileState.skills.map(s=>s.toLowerCase()) : normalizeArrayString(profileState.skills).map(s=>s.toLowerCase());
+  const roles = normalizeArrayString(profileState.roles).map(s=>s.toLowerCase());
+  const locations = normalizeArrayString(profileState.preferredLocations).map(s=>s.toLowerCase());
+
+  let score = 30;
+  const title = String(job.jobTitle||'').toLowerCase();
+  const location = String(job.location||'').toLowerCase();
+  const source = String(job.source||'').toLowerCase();
+
+  roles.forEach(role=>{ if(role && title.includes(role) || role && job.jobTitle.toLowerCase().includes(role)) score += 15; });
+  skills.forEach(skill=>{ if(skill && title.includes(skill)) score += 8; if(skill && location.includes(skill)) score += 4; });
+  locations.forEach(loc=>{ if(loc && location.includes(loc)) score += 15; });
+  if(job.remote && profileState.remotePreference === 'Remote Only') score += 8;
+  score += Math.floor(Math.random()*15);
+  return Math.min(100, Math.max(40, score));
+}
+
+function generateDemoJobs(){
+  const preferredRoles = normalizeArrayString(profileState.roles);
+  const preferredLocations = normalizeArrayString(profileState.preferredLocations);
+  const titles = ['Developer','Engineer','Designer','Specialist','Manager','Analyst','Architect'];
+  const companies = ['Nova Launch','Aurora Systems','Violet Works','Crescent Labs','Stellar AI','BrightWave','PulseTech','Nimbus Digital'];
+  const sources = ['LinkedIn','Indeed','Glassdoor','Monster','CareerBuilder'];
+  const remoteOptions = ['Remote','Hybrid','On-site'];
+  const salaryRanges = ['$70k-$90k','$80k-$105k','$90k-$120k','$100k-$130k','$110k-$150k'];
+  const count = 12 + Math.floor(Math.random()*7);
+  const jobs = [];
+  for(let i=0;i<count;i++){
+    const company = companies[Math.floor(Math.random()*companies.length)];
+    const role = preferredRoles.length ? preferredRoles[Math.floor(Math.random()*preferredRoles.length)] : titles[Math.floor(Math.random()*titles.length)];
+    const jobTitle = `${role} ${['II','III','Lead','Senior','Junior',''].filter(Boolean)[Math.floor(Math.random()*6)]}`.trim();
+    const location = preferredLocations.length ? preferredLocations[Math.floor(Math.random()*preferredLocations.length)] : ['Remote','New York, NY','Austin, TX','London, UK','Berlin, Germany'][Math.floor(Math.random()*5)];
+    const source = sources[Math.floor(Math.random()*sources.length)];
+    const remote = Math.random() > 0.4 ? 'Remote' : (Math.random()>0.5 ? 'Hybrid' : 'On-site');
+    const salary = salaryRanges[Math.floor(Math.random()*salaryRanges.length)];
+    const matchScore = computeJobMatchScore({jobTitle, location, source, remote});
+    jobs.push({
+      id:`demo-job-${Date.now()}-${i}`,
+      company,
+      jobTitle,
+      location,
+      source,
+      remote,
+      salary,
+      matchScore,
+      date:new Date().toISOString().slice(0,10),
+      status:'Found',
+      matched: matchScore >= Number(profileState.minMatchScore || 75),
+      demo:true
+    });
+  }
+  jobsData = jobs;
+  appState.jobs = jobsData;
+  saveAppState();
+  return jobs;
+}
+
+function filterUniqueJobs(jobs){
+  const seen = new Set();
+  return jobs.filter(job => {
+    const key = `${job.jobTitle}|${job.company}|${job.location}`;
+    if(seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function applyPreferenceFilters(jobs){
+  const preferredRoles = normalizeArrayString(profileState.roles).map(v=>v.toLowerCase());
+  const preferredLocations = normalizeArrayString(profileState.preferredLocations).map(v=>v.toLowerCase());
+  return jobs.filter(job => {
+    const title = job.jobTitle.toLowerCase();
+    const location = job.location.toLowerCase();
+    const roleMatch = preferredRoles.length ? preferredRoles.some(role=>title.includes(role) || job.company.toLowerCase().includes(role)) : true;
+    const locationMatch = preferredLocations.length ? preferredLocations.some(loc=>location.includes(loc)) : true;
+    return roleMatch && locationMatch;
+  });
+}
+
+function enforceDailyLimit(jobs){
+  const limit = Number(profileState.dailyLimit) || 30;
+  return jobs.slice(0, limit);
+}
+
+function createCoverLetter(job){
+  return `Dear Hiring Team,\n\nI am excited to apply for the ${job.jobTitle} role at ${job.company}. With my experience in ${normalizeArrayString(profileState.skills).join(', ')}, I am confident I can contribute to your team.\n\nBest regards,\n${profileState.firstName}`;
+}
+
+function buildApplicationResult(job){
+  const autoApply = profileState.autoApply !== false;
+  const baseScore = job.matchScore;
+  if(!autoApply) return 'Pending Review';
+  const random = Math.random();
+  if(baseScore >= 90 && random > 0.2) return 'Success';
+  if(random < 0.12) return 'Temporary Failure';
+  if(random < 0.2) return 'Manual Review';
+  if(random < 0.28) return 'Permanent Failure';
+  return 'Success';
+}
+
+async function highlightNode(id, status='completed', duration=900){
+  const node = nodeState[id];
+  if(!node || !node.el) return;
+  node.el.classList.add('selected');
+  applyWorkflowNodeStyle(id,'pending');
+  await delay(duration);
+  node.el.classList.remove('selected');
+  applyWorkflowNodeStyle(id,status);
+}
+
+async function runWorkflow(){
+  if(workflowRunning) return;
+  workflowRunning = true;
+  setActivePage('workflow');
+  clearWorkflowNodeStyles();
+  const runBtn = document.querySelector('[data-action="run-workflow"]');
+  if(runBtn){ runBtn.disabled=true; runBtn.textContent='Workflow Running...'; }
+
+  if(!validateProfileForWorkflow()){
+    workflowRunning = false;
+    if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+    return;
+  }
+
+  addActivity('Workflow started.');
+  addNotification('Workflow Started', 'The demo workflow has begun.');
+
+  await highlightNode('n1');
+  await highlightNode('n2');
+
+  const foundJobs = generateDemoJobs();
+  addActivity(`${foundJobs.length} demo jobs were discovered.`);
+  addNotification('Jobs Found', `${foundJobs.length} demo jobs were discovered.`);
+  await highlightNode('n3');
+
+  const uniqueJobs = filterUniqueJobs(foundJobs);
+  jobsData = uniqueJobs;
+  appState.jobs = jobsData;
+  saveAppState();
+  await highlightNode('n4', uniqueJobs.length ? 'completed' : 'skipped');
+
+  jobsData = jobsData.map(job => ({...job, matchScore: computeJobMatchScore(job), matched: computeJobMatchScore(job) >= Number(profileState.minMatchScore || 75)}));
+  appState.jobs = jobsData;
+  saveAppState();
+  await highlightNode('n5');
+
+  const threshold = Number(profileState.minMatchScore) || 75;
+  jobsData = jobsData.map(job => ({...job, matched: job.matchScore >= threshold}));
+  appState.jobs = jobsData;
+  saveAppState();
+  await highlightNode('n6');
+
+  await highlightNode('d7', jobsData.some(job=>job.matched) ? 'completed' : 'pending');
+
+  let filteredJobs = jobsData.filter(job=>job.matched);
+  filteredJobs = applyPreferenceFilters(filteredJobs);
+  jobsData = filteredJobs;
+  appState.jobs = jobsData;
+  saveAppState();
+  await highlightNode('n8', filteredJobs.length ? 'completed' : 'skipped');
+
+  const existingJobKeys = new Set(sampleApplications.map(a=>`${a.jobTitle}|${a.company}|${a.location}`));
+  filteredJobs = filteredJobs.filter(job=>!existingJobKeys.has(`${job.jobTitle}|${job.company}|${job.location}`));
+  jobsData = filteredJobs;
+  appState.jobs = jobsData;
+  saveAppState();
+  await highlightNode('n9', filteredJobs.length ? 'completed' : 'skipped');
+
+  const limitedJobs = enforceDailyLimit(filteredJobs);
+  jobsData = limitedJobs;
+  appState.jobs = jobsData;
+  saveAppState();
+  await highlightNode('n10', limitedJobs.length ? 'completed' : 'skipped');
+
+  await highlightNode('n11', profileState.autoCover ? 'completed' : 'skipped');
+
+  const createdApps = limitedJobs.map(job=>{
+    const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
+    const status = buildApplicationResult(job);
+    const application = {
+      id: nextId,
+      jobTitle: job.jobTitle,
+      company: job.company,
+      location: job.location,
+      source: job.source,
+      matchScore: job.matchScore,
+      date: new Date().toISOString().slice(0,10),
+      status,
+      coverLetter: profileState.autoCover ? createCoverLetter(job) : '',
+      demo:true
+    };
+    appState.settings.nextApplicationId = nextId + 1;
+    return application;
+  });
+  if(createdApps.length){
+    sampleApplications.unshift(...createdApps);
+    saveAppState();
+  }
+  await highlightNode('n12', createdApps.length ? 'completed' : 'skipped');
+
+  const applyStatus = profileState.autoApply ? 'completed' : 'pending';
+  await highlightNode('n14', createdApps.length ? applyStatus : 'skipped');
+
+  renderApplicationsTable();
+  renderDashboard();
+  renderAnalytics();
+  await highlightNode('n16', createdApps.length ? 'completed' : 'skipped');
+
+  addActivity(`Workflow completed with ${createdApps.length} applications.`);
+  addNotification('Workflow Completed', `${createdApps.length} applications were generated.`);
+  await highlightNode('n17', createdApps.length ? 'completed' : 'pending');
+
+  renderNotifications();
+
+  workflowRunning = false;
+  if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+  showToast('Workflow completed.', 'success');
+}
+
+function resetDemoData(){
+  jobsData = [];
+  sampleApplications = [];
+  appState.jobs = [];
+  appState.applications = [];
+  appState.notifications = [];
+  appState.activity = [];
+  saveAppState();
+  clearWorkflowNodeStyles();
+  renderApplicationsTable();
+  renderDashboard();
+  renderAnalytics();
+  renderNotifications();
+  showToast('Demo data cleared. Profile preserved.');
+}
+
 function loadMoreApplications(){
   const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
   const extra = [
@@ -843,6 +1130,8 @@ document.addEventListener('click', (event)=>{
     const action = actionBtn.dataset.action;
     if(action === 'run-demo-scan') runDemoScan();
     if(action === 'add-demo-job') addDemoJob();
+    if(action === 'run-workflow') runWorkflow();
+    if(action === 'reset-demo-data') resetDemoData();
     return;
   }
   const openBtn = event.target.closest('.open-profile-btn');
