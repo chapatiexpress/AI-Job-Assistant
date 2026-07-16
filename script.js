@@ -914,15 +914,49 @@ function isValidEmail(email){
   return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function normalizeSkill(value){
+  return String(value||'').trim();
+}
+
+function skillKey(value){
+  return normalizeSkill(value).toLowerCase();
+}
+
+function hasSkillTag(value){
+  const key = skillKey(value);
+  return Array.from(profileFields.skillsTags.querySelectorAll('.tag-pill'))
+    .some(tag => skillKey(tag.dataset.value) === key);
+}
+
+function addSkillTag(value){
+  const skill = normalizeSkill(value);
+  if(!skill || hasSkillTag(skill)) return false;
+  profileFields.skillsTags.appendChild(createSkillTag(skill));
+  return true;
+}
+
+function processPendingSkillInput(){
+  const pending = profileFields.skillsInput.value.trim();
+  if(!pending) return false;
+  const added = addSkillTag(pending);
+  if(added){
+    profileFields.skillsInput.value = '';
+  }
+  return added;
+}
+
 function getSkillsFromTags(){
-  return Array.from(profileFields.skillsTags.querySelectorAll('.tag-pill')).map(tag=>tag.dataset.value).filter(Boolean);
+  return Array.from(profileFields.skillsTags.querySelectorAll('.tag-pill'))
+    .map(tag=>normalizeSkill(tag.dataset.value))
+    .filter(Boolean);
 }
 
 function createSkillTag(value){
+  const skill = normalizeSkill(value);
   const tag = document.createElement('span');
   tag.className = 'tag-pill';
-  tag.dataset.value = value;
-  tag.innerHTML = `${escapeHtml(value)}<button type="button" aria-label="Remove skill">×</button>`;
+  tag.dataset.value = skill;
+  tag.innerHTML = `${escapeHtml(skill)}<button type="button" aria-label="Remove skill">×</button>`;
   tag.querySelector('button').addEventListener('click', ()=>{
     tag.remove();
     autoSaveProfileData();
@@ -932,8 +966,18 @@ function createSkillTag(value){
 
 function renderSkillTags(){
   profileFields.skillsTags.innerHTML = '';
-  const skills = Array.isArray(profileState.skills) ? profileState.skills : String(profileState.skills || '').split(',').map(s=>s.trim()).filter(Boolean);
-  skills.forEach(skill=>profileFields.skillsTags.appendChild(createSkillTag(skill)));
+  const rawSkills = Array.isArray(profileState.skills) ? profileState.skills : String(profileState.skills || '').split(',');
+  const uniqueSkills = [];
+  const seen = new Set();
+  rawSkills.forEach(raw=>{
+    const skill = normalizeSkill(raw);
+    const key = skillKey(skill);
+    if(!skill || seen.has(key)) return;
+    seen.add(key);
+    uniqueSkills.push(skill);
+  });
+  profileState.skills = uniqueSkills;
+  uniqueSkills.forEach(skill=>profileFields.skillsTags.appendChild(createSkillTag(skill)));
 }
 
 function updateProfileWhenChanged(){
@@ -1021,6 +1065,7 @@ function populateProfileForm(){
 }
 
 function collectProfileState(){
+  processPendingSkillInput();
   return {
     firstName: profileFields.firstName.value.trim(),
     lastName: profileFields.lastName.value.trim(),
@@ -1057,6 +1102,7 @@ function collectProfileState(){
 
 function saveProfileData(event){
   const saveBtn = event && event.currentTarget ? event.currentTarget : document.getElementById('saveProfileBtnBottom') || document.getElementById('saveProfileBtn');
+  processPendingSkillInput();
   const nextProfileState = collectProfileState();
   if(!nextProfileState.firstName){
     showToast('First Name is required.', 'error');
@@ -1173,18 +1219,9 @@ profileSaveButtons.forEach(btn => btn.addEventListener('click', saveProfileData)
 profileFields.skillsInput.addEventListener('keydown', (e)=>{
   if(e.key !== 'Enter') return;
   e.preventDefault();
-  const value = profileFields.skillsInput.value.trim();
-  if(!value) return;
-  profileFields.skillsTags.appendChild(createSkillTag(value));
-  profileFields.skillsInput.value = '';
-  autoSaveProfileData();
-});
-
-['firstName','lastName','email','phone','location','linkedin','portfolio','jobTitle','experience','education','certifications','roles','preferredLocations','remotePreference','aiModel','minMatchScore','dailyLimit','autoCover','autoApply','smartMatch','emailNotifications'].forEach(key=>{
-  const el = profileFields[key];
-  if(!el) return;
-  el.addEventListener('change', autoSaveProfileData);
-  if(el.tagName === 'INPUT') el.addEventListener('input', ()=>{ if(el.type !== 'range') return; profileFields.minMatchScoreValue.textContent = el.value; autoSaveProfileData(); });
+  if(processPendingSkillInput()){
+    autoSaveProfileData();
+  }
 });
 
 /* click-to-open-profile from the workflow "Load Profile and Resume" card is
