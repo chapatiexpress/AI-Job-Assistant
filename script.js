@@ -1103,6 +1103,7 @@ async function runWorkflow(){
       job.workflowFinalStatus = 'pending_review';
       setJobExecutionState(job, 'pending_review');
       await executeWorkflowNode(job, 'd13', 'pending_review', 'completed');
+      markWorkflowNodesSkipped(['n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
       const application = persistApplication(job, 'Pending Review', {manualReviewRequired:true, coverLetter: profileState.autoCover ? createCoverLetter(job) : ''});
       workflowPauseContext = {jobId: job.id, appId: application.id};
       renderDashboard();
