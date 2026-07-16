@@ -1002,6 +1002,7 @@ async function resumeApprovalWorkflow(app){
 
 async function runWorkflow(){
   if(workflowRunning) return;
+  addActivity(`runWorkflow invoked (scanWaiting=${scanWaiting}, resumeAfterScanTrigger=${resumeAfterScanTrigger}, workflowRunning=${workflowRunning})`);
   workflowRunning = true;
   setActivePage('workflow');
   clearWorkflowNodeStyles();
@@ -1010,6 +1011,7 @@ async function runWorkflow(){
 
   profileState = loadProfileState();
   if(!validateProfileForWorkflow()){
+    addActivity('runWorkflow aborted: profile validation failed.');
     workflowRunning = false;
     if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
     return;
