@@ -600,7 +600,22 @@ function addDemoJob(){
   showToast('Demo job added.');
 }
 
-function runDemoScan(){
+async function runDemoScan(){
+  if(scanWaiting && !workflowRunning){
+    addActivity('Demo scan trigger received while waiting for the next scan.');
+    addNotification('Scan Triggered', 'The workflow will resume after the wait for next scan.');
+    await executeWorkflowNode(null, 'n19', 'completed', 'completed');
+    scanWaiting = false;
+    renderNotifications();
+    runWorkflow();
+    return;
+  }
+
+  if(workflowPauseContext){
+    showToast('Cannot run demo scan while the workflow is paused for review or manual action.', 'warning');
+    return;
+  }
+
   const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
   const newApplication = {
     id: nextId,
@@ -637,6 +652,7 @@ const WORKFLOW_STATUS_COLOR = {
 };
 let workflowRunning = false;
 let workflowPauseContext = null;
+let scanWaiting = false;
 
 function applyWorkflowNodeStyle(id, status){
   const node = nodeState[id];
@@ -1006,6 +1022,7 @@ async function runWorkflow(){
   addActivity('Workflow started.');
   addNotification('Workflow Started', 'The demo workflow has begun.');
 
+  scanWaiting = false;
   await highlightNode('n1');
   await highlightNode('n2');
 
@@ -1101,6 +1118,7 @@ async function runWorkflow(){
       addActivity('Daily limit reached. Waiting for the next scan cycle.');
       addNotification('Waiting for Next Scan', 'Daily application limit reached. The workflow is waiting for the next scan.');
       waitingForNextScan = true;
+      scanWaiting = true;
       break;
     }
 
