@@ -408,7 +408,6 @@ const DEFAULT_APP_STATE = {
   activity:[],
   jobs:[],
   applications:[],
-  skippedJobs:[],
   settings:{nextJobId:101,nextApplicationId:1,pageSize:8,demoMode:false}
 };
 
@@ -424,7 +423,6 @@ function loadAppState(){
         activity: Array.isArray(cleaned.activity)?cleaned.activity:DEFAULT_APP_STATE.activity.slice(),
         jobs: Array.isArray(cleaned.jobs)?cleaned.jobs:DEFAULT_APP_STATE.jobs.slice(),
         applications: Array.isArray(cleaned.applications)?cleaned.applications:DEFAULT_APP_STATE.applications.slice(),
-        skippedJobs: Array.isArray(cleaned.skippedJobs)?cleaned.skippedJobs:DEFAULT_APP_STATE.skippedJobs.slice(),
         settings:{...DEFAULT_APP_STATE.settings, ...(cleaned.settings||{})}
       };
     }
@@ -447,9 +445,6 @@ function cleanDemoData(state){
   if(Array.isArray(cleaned.applications)){
     cleaned.applications = cleaned.applications.filter(a=> !a || a.demo !== true && !(typeof a.id === 'string' && a.id.startsWith('demo-')));
   }
-  if(Array.isArray(cleaned.skippedJobs)){
-    cleaned.skippedJobs = cleaned.skippedJobs.filter(a=> !a || a.demo !== true && !(typeof a.id === 'string' && a.id.startsWith('demo-')));
-  }
   return cleaned;
 }
 
@@ -458,7 +453,6 @@ function saveAppState(){
   appState.workflowSettings = allSettings;
   appState.jobs = jobsData;
   appState.applications = sampleApplications;
-  appState.skippedJobs = skippedJobs;
   localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState));
 }
 
@@ -650,6 +644,14 @@ function applyWorkflowNodeStyle(id, status){
   node.el.style.boxShadow = `0 0 0 10px ${color}33`;
 }
 
+function clearWorkflowNodeStyles(){
+  Object.values(nodeState).forEach(n=>{
+    if(!n.el) return;
+    n.el.style.borderColor = '';
+    n.el.style.boxShadow = '';
+  });
+}
+
 function validateProfileForWorkflow(){
   const missing = [];
   if(!profileState.resumeUploaded) missing.push('Resume upload');
@@ -761,18 +763,16 @@ function createCoverLetter(job){
   return `Dear Hiring Team,\n\nI am excited to apply for the ${job.jobTitle} role at ${job.company}. With my experience in ${normalizeArrayString(profileState.skills).join(', ')}, I am confident I can contribute to your team.\n\nBest regards,\n${profileState.firstName}`;
 }
 
-function simulateSubmissionResult(job){
-  const autoApply = profileState.autoApply !== false;
-  if(!autoApply) return {status:'Pending Review'};
-  const r = Math.random();
-  if(r < 0.5) return {status:'Success'};
-  if(r < 0.7) return {status:'Temporary Failure'};
-  if(r < 0.9) return {status:'Manual Action Needed'};
-  return {status:'Permanent Failure'};
-}
-
 function buildApplicationResult(job){
-  return simulateSubmissionResult(job).status;
+  const autoApply = profileState.autoApply !== false;
+  const baseScore = job.matchScore;
+  if(!autoApply) return 'Pending Review';
+  const random = Math.random();
+  if(baseScore >= 90 && random > 0.2) return 'Success';
+  if(random < 0.12) return 'Temporary Failure';
+  if(random < 0.2) return 'Manual Review';
+  if(random < 0.28) return 'Permanent Failure';
+  return 'Success';
 }
 
 async function highlightNode(id, status='completed', duration=900){
@@ -783,29 +783,6 @@ async function highlightNode(id, status='completed', duration=900){
   await delay(duration);
   node.el.classList.remove('selected');
   applyWorkflowNodeStyle(id,status);
-}
-
-function highlightConnector(from, to, color){
-  const index = connectors.findIndex(c=>c.from===from && c.to===to);
-  if(index === -1 || !connEls[index]) return;
-  connEls[index].setAttribute('stroke', color || '#16a34a');
-  connEls[index].setAttribute('stroke-width','4');
-}
-
-function clearWorkflowNodeStyles(){
-  Object.values(nodeState).forEach(n=>{
-    if(!n.el) return;
-    n.el.style.borderColor = '';
-    n.el.style.boxShadow = '';
-  });
-  connEls.forEach(p=>{
-    if(!p) return;
-    const idx = connEls.indexOf(p);
-    if(idx >= 0){
-      p.setAttribute('stroke', connectors[idx].color);
-      p.setAttribute('stroke-width','2.2');
-    }
-  });
 }
 
 async function runWorkflow(){
@@ -850,46 +827,26 @@ async function runWorkflow(){
   await highlightNode('n5');
   await highlightNode('n6');
 
-  const threshold = Number(profileState.minMatchScore || 75);
-  const matchedJobs = jobsData.filter(job=>job.matchScore >= threshold);
-  const skipped = jobsData.filter(job=>job.matchScore < threshold).map(job=>({
-    id: job.id || `skip-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    jobTitle: job.jobTitle,
-    company: job.company,
-    source: job.source,
-    location: job.location,
-    matchScore: job.matchScore,
-    requiredScore: threshold,
-    status: 'Skipped',
-    skipReason: 'Match score below threshold',
-    skippedAt: new Date().toISOString().slice(0,10),
-    date: new Date().toISOString().slice(0,10),
-    demo:true
-  }));
-  if(skipped.length){
-    skippedJobs.unshift(...skipped);
-    saveAppState();
-    addActivity(`${skipped.length} jobs were skipped due to low match score.`);
-    addNotification('Jobs Skipped', `${skipped.length} jobs were skipped because they did not meet the threshold.`);
-  }
+  await highlightNode('d7', jobsData.some(job=>job.matched) ? 'completed' : 'pending');
 
-  await highlightNode('d7', matchedJobs.length ? 'completed' : 'pending');
-  if(skipped.length){
-    await highlightConnector('d7','skip','red');
-    await highlightNode('skip', 'completed');
-    await highlightNode('n18', 'completed');
-  }
-
-  let filteredJobs = applyPreferenceFilters(matchedJobs);
+  let filteredJobs = jobsData.filter(job=>job.matched);
+  filteredJobs = applyPreferenceFilters(filteredJobs);
   jobsData = filteredJobs;
   appState.jobs = jobsData;
   saveAppState();
   await highlightNode('n8', filteredJobs.length ? 'completed' : 'skipped');
 
   const existingJobKeys = new Set(sampleApplications.map(a=>`${a.jobTitle}|${a.company}|${a.location}`));
-  const dedupedFilteredJobs = filteredJobs.filter(job=>!existingJobKeys.has(`${job.jobTitle}|${job.company}|${job.location}`));
-  const limitedJobs = enforceDailyLimit(dedupedFilteredJobs);
-  await highlightNode('n9', dedupedFilteredJobs.length ? 'completed' : 'skipped');
+  filteredJobs = filteredJobs.filter(job=>!existingJobKeys.has(`${job.jobTitle}|${job.company}|${job.location}`));
+  jobsData = filteredJobs;
+  appState.jobs = jobsData;
+  saveAppState();
+  await highlightNode('n9', filteredJobs.length ? 'completed' : 'skipped');
+
+  const limitedJobs = enforceDailyLimit(filteredJobs);
+  jobsData = limitedJobs;
+  appState.jobs = jobsData;
+  saveAppState();
   await highlightNode('n10', limitedJobs.length ? 'completed' : 'skipped');
 
   await highlightNode('n11', profileState.autoCover ? 'completed' : 'skipped');
@@ -934,18 +891,10 @@ async function runWorkflow(){
     return;
   }
 
-  await highlightNode('d15', limitedJobs.length ? 'completed' : 'skipped');
-  const createdApps = [];
-  const branchMap = {
-    'Success': {node:'success', store:'st-success', color:'#16a34a'},
-    'Temporary Failure': {node:'tempfail', store:'st-temp', color:'#ea580c'},
-    'Manual Action Needed': {node:'manual', store:'st-manual', color:'#2563eb'},
-    'Permanent Failure': {node:'permfail', store:'st-perm', color:'#dc2626'},
-  };
-
-  for(const job of limitedJobs){
+  await highlightNode('d13', 'skipped');
+  const createdApps = limitedJobs.map(job=>{
     const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
-    const result = simulateSubmissionResult(job);
+    const status = buildApplicationResult(job);
     const application = {
       id: nextId,
       jobTitle: job.jobTitle,
@@ -954,41 +903,17 @@ async function runWorkflow(){
       source: job.source,
       matchScore: job.matchScore,
       date: new Date().toISOString().slice(0,10),
-      status: result.status,
+      status,
       coverLetter: profileState.autoCover ? createCoverLetter(job) : '',
-      submittedAt: new Date().toISOString(),
-      demo:true,
-      ...(result.status === 'Success' ? {confirmation:'Application submitted successfully.'} : {}),
-      ...(result.status === 'Temporary Failure' ? {
-        failureReason:'Temporary network or service error',
-        retryCount:1,
-        nextRetryAt:new Date(Date.now()+24*60*60*1000).toISOString().slice(0,10)
-      } : {}),
-      ...(result.status === 'Manual Action Needed' ? {
-        manualActionRequired:true,
-        pendingDetails:'User approval is needed before completion.'
-      } : {}),
-      ...(result.status === 'Permanent Failure' ? {
-        failureReason:'Application blocked by provider policy',
-        failedAt:new Date().toISOString()
-      } : {}),
+      demo:true
     };
     appState.settings.nextApplicationId = nextId + 1;
-    createdApps.push(application);
-
-    const branch = branchMap[result.status];
-    if(branch){
-      highlightConnector('d15', branch.node, branch.color);
-      await highlightNode(branch.node, 'completed');
-      await highlightNode(branch.store, 'completed');
-    }
-  }
-
+    return application;
+  });
   if(createdApps.length){
     sampleApplications.unshift(...createdApps);
     saveAppState();
   }
-
   await highlightNode('n14', createdApps.length ? 'completed' : 'skipped');
 
   renderApplicationsTable();
@@ -1010,10 +935,8 @@ async function runWorkflow(){
 function resetDemoData(){
   jobsData = [];
   sampleApplications = [];
-  skippedJobs = [];
   appState.jobs = [];
   appState.applications = [];
-  appState.skippedJobs = [];
   appState.notifications = [];
   appState.activity = [];
   saveAppState();
@@ -1045,7 +968,6 @@ let appState = loadAppState();
 let allSettings = appState.workflowSettings || {};
 let profileState = appState.profile || {};
 let sampleApplications = appState.applications || [];
-let skippedJobs = appState.skippedJobs || [];
 let jobsData = appState.jobs || [];
 
 /* per-card-type field definitions (beyond the universal Name/Description/Status/Enable Step) */
@@ -1839,12 +1761,10 @@ panel.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let c
 const STATUS_META = {
   'Success':            {cls:'status-success',  icon:'✔'},
   'Pending Review':     {cls:'status-pending',  icon:'⏳'},
-  'Manual Action Needed': {cls:'status-pending', icon:'🛠'},
   'Temporary Failure':  {cls:'status-tempfail',  icon:'⏱'},
   'Permanent Failure':  {cls:'status-permfail',  icon:'✕'},
-  'Skipped':            {cls:'status-skipped',   icon:'⏭'},
 };
-const STATUS_ORDER = ['Success','Pending Review','Manual Action Needed','Temporary Failure','Permanent Failure','Skipped'];
+const STATUS_ORDER = ['Success','Pending Review','Temporary Failure','Permanent Failure'];
 
 function formatSampleDate(dateStr){
   const d = new Date(dateStr+'T00:00:00');
@@ -1861,22 +1781,20 @@ function computeDashboardStats(){
   return {
     totalJobsFound: (appState.jobs || []).length,
     jobsMatched: (appState.jobs || []).filter(j=>j.matched).length,
-    jobsSkipped: skippedJobs.length,
     applicationsSent: sampleApplications.length,
-    pendingReviews: sampleApplications.filter(a=>a.status==='Pending Review' || a.status==='Manual Action Needed').length,
+    pendingReviews: sampleApplications.filter(a=>a.status==='Pending Review').length,
     successful: sampleApplications.filter(a=>a.status==='Success').length,
     failed: sampleApplications.filter(a=>a.status==='Temporary Failure' || a.status==='Permanent Failure').length,
   };
 }
 
 function buildStatusBarsHtml(){
-  const allApps = [...sampleApplications, ...skippedJobs];
-  if(allApps.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
-  const total = allApps.length;
+  if(sampleApplications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
+  const total = sampleApplications.length;
   return STATUS_ORDER.map(status=>{
-    const count = allApps.filter(a=>a.status===status).length;
+    const count = sampleApplications.filter(a=>a.status===status).length;
     const pct = total ? Math.round((count/total)*100) : 0;
-    const meta = STATUS_META[status] || {cls:'',icon:''};
+    const meta = STATUS_META[status];
     return `<div class="bar-row">
       <div class="bar-label">${escapeHtml(status)}</div>
       <div class="bar-track"><div class="bar-fill ${meta.cls}" style="width:${pct}%"></div></div>
@@ -1886,12 +1804,11 @@ function buildStatusBarsHtml(){
 }
 
 function buildSourceBarsHtml(){
-  const allApps = [...sampleApplications, ...skippedJobs];
-  if(allApps.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
-  const total = allApps.length;
-  const sources = [...new Set(allApps.map(a=>a.source))];
+  if(sampleApplications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
+  const total = sampleApplications.length;
+  const sources = [...new Set(sampleApplications.map(a=>a.source))];
   return sources.map(source=>{
-    const count = allApps.filter(a=>a.source===source).length;
+    const count = sampleApplications.filter(a=>a.source===source).length;
     const pct = total ? Math.round((count/total)*100) : 0;
     return `<div class="bar-row">
       <div class="bar-label">${escapeHtml(source)}</div>
@@ -1908,7 +1825,6 @@ function renderDashboard(){
   const cards = [
     {label:'Total Jobs Found',           value:stats.totalJobsFound, icon:'📄', color:'#334155'},
     {label:'Jobs Matched',               value:stats.jobsMatched,    icon:'🎯', color:'#7c3aed'},
-    {label:'Jobs Skipped',               value:stats.jobsSkipped,   icon:'⏭', color:'#f59e0b'},
     {label:'Applications Sent',          value:stats.applicationsSent, icon:'📤', color:'#2563eb'},
     {label:'Pending Reviews',            value:stats.pendingReviews, icon:'⏳', color:'#ea580c'},
     {label:'Successful Applications',    value:stats.successful,     icon:'✅', color:'#16a34a'},
@@ -1959,8 +1875,7 @@ function renderApplicationsTable(){
   const sortBy = (appsSortByEl && appsSortByEl.value) || 'date';
   const sortOrder = (appsSortOrderEl && appsSortOrderEl.value) || 'desc';
 
-  const sourceData = statusFilter === 'Skipped' ? skippedJobs : sampleApplications;
-  const filtered = sourceData.filter(a=>{
+  const filtered = sampleApplications.filter(a=>{
     const matchesQuery = !query || a.jobTitle.toLowerCase().includes(query) || a.company.toLowerCase().includes(query);
     const matchesStatus = statusFilter === 'All' || a.status === statusFilter;
     const matchesSource = sourceFilter === 'All' || a.source === sourceFilter;
@@ -1979,25 +1894,22 @@ function renderApplicationsTable(){
   tbody.innerHTML = filtered.map(a=>{
     const meta = STATUS_META[a.status] || {cls:'',icon:''};
     const approveButton = a.status === 'Pending Review' ? `<button type="button" class="apps-action-btn" data-action="approve-application" data-app-id="${a.id}">Approve</button>` : '';
-  const continueButton = a.status === 'Manual Action Needed' ? `<button type="button" class="apps-action-btn" data-action="approve-application" data-app-id="${a.id}">Continue</button>` : '';
-  const retryButton = a.status === 'Temporary Failure' ? `<button type="button" class="apps-action-btn" data-action="retry-application" data-app-id="${a.id}">Retry</button>` : '';
-  const detailsLine = a.failureReason ? `<div class="app-detail">${escapeHtml(a.failureReason)}</div>` : a.pendingDetails ? `<div class="app-detail">${escapeHtml(a.pendingDetails)}</div>` : a.nextRetryAt ? `<div class="app-detail">Retry at ${escapeHtml(a.nextRetryAt)}</div>` : a.confirmation ? `<div class="app-detail">${escapeHtml(a.confirmation)}</div>` : '';
     return `<tr>
-      <td data-label="Job Title">${escapeHtml(a.jobTitle)}${detailsLine}</td>
+      <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
       <td data-label="Company">${escapeHtml(a.company)}</td>
       <td data-label="Match Score"><span class="match-score-pill">${a.matchScore}%</span></td>
       <td data-label="Date">${escapeHtml(formatSampleDate(a.date))}</td>
       <td data-label="Status"><span class="status-badge ${meta.cls}">${meta.icon} ${escapeHtml(a.status)}</span></td>
       <td data-label="Action">
-        <button type="button" class="apps-action-btn" data-action="view-application" data-app-id="${a.id}">View</button>
-        ${approveButton}${continueButton}${retryButton}
+        <button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button>
+        ${approveButton}
       </td>
     </tr>`;
   }).join('');
 
   if(emptyState){
-    if(sourceData.length === 0){
-      emptyState.textContent = statusFilter === 'Skipped' ? 'No skipped jobs yet. Skipped jobs appear when a job falls below match score threshold.' : 'No applications yet. Applications will appear here after you submit a job application.';
+    if(sampleApplications.length === 0){
+      emptyState.textContent = 'No applications yet. Applications will appear here after you submit a job application.';
     } else {
       emptyState.textContent = 'No applications match your search or filter.';
     }
@@ -2008,22 +1920,17 @@ function renderApplicationsTable(){
 function renderAnalytics(){
   const grid = document.getElementById('analyticsStatsGrid');
   if(!grid) return;
-  const totalApps = sampleApplications.length;
+  const total = sampleApplications.length;
   const successCount = sampleApplications.filter(a=>a.status==='Success').length;
-  const successRate = totalApps ? Math.round((successCount/totalApps)*100) : 0;
-  const avgMatch = totalApps ? Math.round(sampleApplications.reduce((sum,a)=>sum+a.matchScore,0)/totalApps) : 0;
+  const successRate = total ? Math.round((successCount/total)*100) : 0;
+  const avgMatch = total ? Math.round(sampleApplications.reduce((sum,a)=>sum+a.matchScore,0)/total) : 0;
   const thisWeek = sampleApplications.filter(a=>daysSince(a.date) <= 7).length;
-  const totalSkipped = skippedJobs.length;
-  const totalFound = (appState.jobs || []).length;
-  const skipRate = totalFound ? Math.round((totalSkipped/totalFound)*100) : 0;
-  const avgSkipped = totalSkipped ? Math.round(skippedJobs.reduce((sum,s)=>sum+s.matchScore,0)/totalSkipped) : 0;
 
   const cards = [
-    {label:'Total Applications',        value:totalApps,          icon:'📤', color:'#2563eb'},
+    {label:'Total Applications',        value:total,          icon:'📤', color:'#2563eb'},
     {label:'Success Rate',              value:successRate+'%', icon:'✅', color:'#16a34a'},
     {label:'Avg Match Score',           value:avgMatch+'%',    icon:'🎯', color:'#7c3aed'},
     {label:'Applications This Week',    value:thisWeek,        icon:'📅', color:'#ea580c'},
-    {label:'Skipped Jobs',              value:totalSkipped,      icon:'⏭', color:'#f59e0b'},
   ];
   grid.innerHTML = cards.map(c=>`
     <div class="dash-card">
@@ -2041,10 +1948,10 @@ function renderAnalytics(){
 
   const summaryEl = document.getElementById('analyticsSummaryText');
   if(summaryEl){
-    if(totalApps === 0 && totalSkipped === 0){
+    if(total === 0){
       summaryEl.textContent = 'Analytics will appear after application activity is recorded.';
     } else {
-      summaryEl.textContent = `In the current dataset, ${totalApps} applications were sent with a ${successRate}% success rate and an average match score of ${avgMatch}%. ${totalSkipped} jobs were skipped (${skipRate}% skip rate) with an average skipped score of ${avgSkipped}%. ${thisWeek} application${thisWeek===1?'':'s'} went out in the last 7 days.`;
+      summaryEl.textContent = `In the current dataset, ${total} applications were sent with a ${successRate}% success rate and an average match score of ${avgMatch}%. ${thisWeek} application${thisWeek===1?'':'s'} went out in the last 7 days.`;
     }
   }
 }
@@ -2071,11 +1978,9 @@ if(appsTableBodyEl){
     if(approveBtn){
       const id = Number(approveBtn.dataset.appId);
       const app = sampleApplications.find(a=>a.id===id);
-      if(app && (app.status === 'Pending Review' || app.status === 'Manual Action Needed')){
+      if(app && app.status === 'Pending Review'){
         app.status = 'Submitted';
         app.manualReviewRequired = false;
-        app.manualActionRequired = false;
-        app.approvedAt = new Date().toISOString();
         saveAppState();
         renderApplicationsTable();
         renderDashboard();
@@ -2084,24 +1989,6 @@ if(appsTableBodyEl){
         addNotification('Application Approved', `${app.jobTitle} at ${app.company} is now submitted.`);
         renderNotifications();
         showToast('Application approved and submitted.', 'success');
-      }
-      return;
-    }
-    const retryBtn = e.target.closest('[data-action="retry-application"]');
-    if(retryBtn){
-      const id = Number(retryBtn.dataset.appId);
-      const app = sampleApplications.find(a=>a.id===id);
-      if(app && app.status === 'Temporary Failure'){
-        app.retryCount = (app.retryCount || 0) + 1;
-        app.nextRetryAt = new Date(Date.now()+24*60*60*1000).toISOString().slice(0,10);
-        saveAppState();
-        renderApplicationsTable();
-        renderDashboard();
-        renderAnalytics();
-        addActivity(`Retry scheduled for ${app.jobTitle} at ${app.company}.`);
-        addNotification('Retry Scheduled', `${app.jobTitle} is scheduled to retry on ${app.nextRetryAt}.`);
-        renderNotifications();
-        showToast('Retry scheduled.', 'success');
       }
       return;
     }
