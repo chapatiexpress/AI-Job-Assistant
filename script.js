@@ -799,7 +799,7 @@ function resumeWorkflow(){ if(workflowState.status !== 'paused') return false; r
 function stopWorkflow(reason = 'stopped'){ return setWorkflowState('stopped', {pauseReason: reason, currentStatus:'stopped'}); }
 
 function prepareApplicationPayload(job){
-  const applicationUrl = String(job.applicationUrl || '').trim();
+  const applicationUrl = String(job.applicationUrl || job.applyUrl || '').trim();
   const automationPossible = Boolean(job.automationPossible !== false && profileState.resumeUploaded && applicationUrl && isValidUrl(applicationUrl));
   if(applicationUrl && isValidUrl(applicationUrl)){
     try { window.open(applicationUrl, '_blank', 'noopener,noreferrer'); } catch (err) {}
@@ -1034,7 +1034,7 @@ function buildApplicationResult(job, attemptNumber = 0, profileStateOverride, ra
   }
   const state = profileStateOverride || profileState || {};
   const autoApply = state.autoApply !== false;
-  const applicationUrl = String(job && job.applicationUrl || '').trim();
+  const applicationUrl = String(job && (job.applicationUrl || job.applyUrl) || '').trim();
   const baseScore = Number(job && job.matchScore) || 0;
   if(!autoApply) return 'Manual Action Needed';
   if(!job || !applicationUrl || !isValidUrl(applicationUrl)) return 'Manual Action Needed';
@@ -1068,7 +1068,8 @@ function createApplicationRecord(job, status, extra = {}){
     company: job.company,
     location: job.location,
     source: job.source,
-    applyUrl: job.applyUrl || '',
+    applicationUrl: job.applicationUrl || job.applyUrl || '',
+    applyUrl: job.applyUrl || job.applicationUrl || '',
     matchScore: Number(job.matchScore) || 0,
     date: new Date().toISOString().slice(0,10),
     status,
@@ -1092,7 +1093,8 @@ function persistApplication(job, status, extra = {}){
     company: job.company,
     location: job.location,
     source: job.source,
-    applyUrl: job.applyUrl || application.applyUrl || '',
+    applicationUrl: job.applicationUrl || application.applicationUrl || job.applyUrl || application.applyUrl || '',
+    applyUrl: job.applyUrl || application.applyUrl || job.applicationUrl || application.applicationUrl || '',
     matchScore: Number(job.matchScore) || application.matchScore || 0,
     date: application.date || new Date().toISOString().slice(0,10),
     status,
@@ -1359,7 +1361,13 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
   await executeWorkflowNode(job, 'n14', 'applying', 'completed');
   await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
 
-  const submissionResult = buildApplicationResult(job, (app.retryCount || 0), profileState);
+  const automationInfo = prepareApplicationPayload(job);
+  const resumeState = {
+    ...profileState,
+    autoApply: true,
+    resumeUploaded: true
+  };
+  const submissionResult = buildApplicationResult(job, (app.retryCount || 0), resumeState);
   applySubmissionResultVisuals(submissionResult);
 
   switch(submissionResult){
@@ -1385,11 +1393,14 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
       job.workflowFinalStatus = 'manual_action_needed';
       const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'Manual action required before submission.'});
       workflowPauseContext = {jobId: job.id, appId: manualApp.id};
+      if(queueEntry) queueEntry.status = 'waiting_manual_review';
       workflowState.currentStatus = 'paused';
       workflowState.pauseReason = 'manual_review';
       setWorkflowState('paused', {pauseReason:'manual_review'});
       addActivity(`Manual action required for ${job.jobTitle} at ${job.company}.`);
-      addNotification('Pending Review', `${job.jobTitle} at ${job.company} needs user action.`);
+      addNotification('Manual Action Needed', `${job.jobTitle} at ${job.company} requires manual action.`);
+      await executeWorkflowNode(job, 'n16', 'completed', 'completed');
+      await executeWorkflowNode(job, 'n17', 'completed', 'completed');
       renderApplicationsTable();
       renderDashboard();
       renderAnalytics();
