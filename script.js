@@ -689,9 +689,6 @@ const jobProviderService = {
           const remote = remoteOptions[Math.floor(Math.random()*remoteOptions.length)];
           const source = sources[Math.floor(Math.random()*sources.length)];
           const salary = salaryRanges[Math.floor(Math.random()*salaryRanges.length)];
-          const safeCompany = company.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
-          const safeRole = role.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
-          const applicationUrl = `https://apply.${safeCompany}.example.com/${safeRole}-${Date.now()}-${i}`;
           const requiresManualAction = Math.random() < 0.12 || (source.toLowerCase().includes('monster') && Math.random() < 0.35);
           jobs.push({
             id:`provider-job-${Date.now()}-${i}`,
@@ -703,8 +700,8 @@ const jobProviderService = {
             jobType: 'Full-time',
             remote,
             description: `Opportunity for a ${role.toLowerCase()} role focused on impact, collaboration, and shipping high quality work.`,
-            applicationUrl,
-            applyUrl: applicationUrl,
+            applicationUrl: '',
+            applyUrl: '',
             source,
             postedDate: new Date().toISOString().slice(0,10),
             automationPossible: Boolean(profile.resumeUploaded),
@@ -807,17 +804,14 @@ function stopWorkflow(reason = 'stopped'){ return setWorkflowState('stopped', {p
 
 function prepareApplicationPayload(job){
   const applicationUrl = String(job.applicationUrl || job.applyUrl || '').trim();
-  const automationPossible = Boolean(job.automationPossible !== false && profileState.resumeUploaded && applicationUrl && isValidUrl(applicationUrl));
-  if(applicationUrl && isValidUrl(applicationUrl)){
-    try { window.open(applicationUrl, '_blank', 'noopener,noreferrer'); } catch (err) {}
-  }
+  const automationPossible = Boolean(job.automationPossible !== false && profileState.resumeUploaded);
   const manualReviewRequired = !automationPossible || !profileState.autoApply;
   return {
     applicationUrl,
     applyUrl: applicationUrl,
     automationPossible,
     manualReviewRequired,
-    notes: applicationUrl && isValidUrl(applicationUrl) ? 'Resume and cover letter prepared for automated submission.' : 'Application URL unavailable.'
+    notes: applicationUrl ? 'Resume and cover letter prepared for automated submission.' : 'Prepared for internal submission simulation.'
   };
 }
 
