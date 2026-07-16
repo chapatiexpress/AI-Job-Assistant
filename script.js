@@ -673,6 +673,7 @@ function clearWorkflowNodeStyles(){
     if(!n.el) return;
     n.el.style.borderColor = '';
     n.el.style.boxShadow = '';
+    n.el.style.backgroundColor = '';
   });
 }
 
@@ -688,6 +689,8 @@ function setCurrentWorkflowNode(id){
   if(!node || !node.el) return;
   node.el.classList.add('selected');
   applyWorkflowNodeStyle(id,'pending');
+  // make a more visible temporary highlight for debugging/visibility
+  try{ node.el.style.backgroundColor = '#f0fbff'; }catch(e){}
 }
 
 function markWorkflowNode(id, status){
@@ -695,6 +698,7 @@ function markWorkflowNode(id, status){
   if(!node || !node.el) return;
   node.el.classList.remove('selected');
   applyWorkflowNodeStyle(id,status);
+  node.el.style.backgroundColor = '';
 }
 
 function markWorkflowNodesSkipped(ids){
