@@ -531,7 +531,7 @@ function setActivePage(page){
     el.classList.toggle('active', isActive);
     el.hidden = !isActive;
   });
-  document.querySelectorAll('[data-page]').forEach(btn=>{
+  document.querySelectorAll('.topnav-link, .page-nav-btn').forEach(btn=>{
     btn.classList.toggle('active', btn.dataset.page === page);
   });
   /* Each page refreshes its own content when it becomes active. Every
