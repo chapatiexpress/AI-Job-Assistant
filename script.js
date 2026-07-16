@@ -793,6 +793,7 @@ async function runWorkflow(){
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if(runBtn){ runBtn.disabled=true; runBtn.textContent='Workflow Running...'; }
 
+  profileState = loadProfileState();
   if(!validateProfileForWorkflow()){
     workflowRunning = false;
     if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
@@ -811,20 +812,19 @@ async function runWorkflow(){
   await highlightNode('n3');
 
   const uniqueJobs = filterUniqueJobs(foundJobs);
-  jobsData = uniqueJobs;
+  jobsData = uniqueJobs.map(job => ({
+    ...job,
+    matchScore: computeJobMatchScore(job),
+  }));
+  jobsData = jobsData.map(job => ({
+    ...job,
+    matched: job.matchScore >= Number(profileState.minMatchScore || 75)
+  }));
   appState.jobs = jobsData;
   saveAppState();
   await highlightNode('n4', uniqueJobs.length ? 'completed' : 'skipped');
 
-  jobsData = jobsData.map(job => ({...job, matchScore: computeJobMatchScore(job), matched: computeJobMatchScore(job) >= Number(profileState.minMatchScore || 75)}));
-  appState.jobs = jobsData;
-  saveAppState();
   await highlightNode('n5');
-
-  const threshold = Number(profileState.minMatchScore) || 75;
-  jobsData = jobsData.map(job => ({...job, matched: job.matchScore >= threshold}));
-  appState.jobs = jobsData;
-  saveAppState();
   await highlightNode('n6');
 
   await highlightNode('d7', jobsData.some(job=>job.matched) ? 'completed' : 'pending');
@@ -850,7 +850,48 @@ async function runWorkflow(){
   await highlightNode('n10', limitedJobs.length ? 'completed' : 'skipped');
 
   await highlightNode('n11', profileState.autoCover ? 'completed' : 'skipped');
+  await highlightNode('n12', limitedJobs.length ? 'completed' : 'skipped');
 
+  const manualReviewRequired = profileState.autoApply === false;
+  if(manualReviewRequired){
+    await highlightNode('d13', 'completed');
+    const pendingApps = limitedJobs.map(job => {
+      const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
+      const application = {
+        id: nextId,
+        jobTitle: job.jobTitle,
+        company: job.company,
+        location: job.location,
+        source: job.source,
+        matchScore: job.matchScore,
+        date: new Date().toISOString().slice(0,10),
+        status: 'Pending Review',
+        coverLetter: profileState.autoCover ? createCoverLetter(job) : '',
+        manualReviewRequired:true,
+        demo:true
+      };
+      appState.settings.nextApplicationId = nextId + 1;
+      return application;
+    });
+    if(pendingApps.length){
+      sampleApplications.unshift(...pendingApps);
+      saveAppState();
+      renderApplicationsTable();
+      renderDashboard();
+      renderAnalytics();
+      addActivity(`Workflow paused; ${pendingApps.length} applications awaiting manual review.`);
+      addNotification('Application waiting for manual approval', `${pendingApps.length} jobs are pending review.`);
+    }
+    await highlightNode('pending', pendingApps.length ? 'completed' : 'skipped');
+    await highlightNode('n14', 'skipped');
+    renderNotifications();
+    workflowRunning = false;
+    if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+    showToast('Workflow completed. Pending review required.', 'warning');
+    return;
+  }
+
+  await highlightNode('d13', 'skipped');
   const createdApps = limitedJobs.map(job=>{
     const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
     const status = buildApplicationResult(job);
@@ -873,10 +914,7 @@ async function runWorkflow(){
     sampleApplications.unshift(...createdApps);
     saveAppState();
   }
-  await highlightNode('n12', createdApps.length ? 'completed' : 'skipped');
-
-  const applyStatus = profileState.autoApply ? 'completed' : 'pending';
-  await highlightNode('n14', createdApps.length ? applyStatus : 'skipped');
+  await highlightNode('n14', createdApps.length ? 'completed' : 'skipped');
 
   renderApplicationsTable();
   renderDashboard();
@@ -1855,13 +1893,17 @@ function renderApplicationsTable(){
 
   tbody.innerHTML = filtered.map(a=>{
     const meta = STATUS_META[a.status] || {cls:'',icon:''};
+    const approveButton = a.status === 'Pending Review' ? `<button type="button" class="apps-action-btn" data-action="approve-application" data-app-id="${a.id}">Approve</button>` : '';
     return `<tr>
       <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
       <td data-label="Company">${escapeHtml(a.company)}</td>
       <td data-label="Match Score"><span class="match-score-pill">${a.matchScore}%</span></td>
       <td data-label="Date">${escapeHtml(formatSampleDate(a.date))}</td>
       <td data-label="Status"><span class="status-badge ${meta.cls}">${meta.icon} ${escapeHtml(a.status)}</span></td>
-      <td data-label="Action"><button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button></td>
+      <td data-label="Action">
+        <button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button>
+        ${approveButton}
+      </td>
     </tr>`;
   }).join('');
 
@@ -1932,6 +1974,24 @@ if(appsLoadMoreBtnEl) appsLoadMoreBtnEl.addEventListener('click', loadMoreApplic
 const appsTableBodyEl = document.getElementById('appsTableBody');
 if(appsTableBodyEl){
   appsTableBodyEl.addEventListener('click', (e)=>{
+    const approveBtn = e.target.closest('[data-action="approve-application"]');
+    if(approveBtn){
+      const id = Number(approveBtn.dataset.appId);
+      const app = sampleApplications.find(a=>a.id===id);
+      if(app && app.status === 'Pending Review'){
+        app.status = 'Submitted';
+        app.manualReviewRequired = false;
+        saveAppState();
+        renderApplicationsTable();
+        renderDashboard();
+        renderAnalytics();
+        addActivity(`Application approved for ${app.jobTitle} at ${app.company}.`);
+        addNotification('Application Approved', `${app.jobTitle} at ${app.company} is now submitted.`);
+        renderNotifications();
+        showToast('Application approved and submitted.', 'success');
+      }
+      return;
+    }
     const btn = e.target.closest('.apps-action-btn');
     if(!btn) return;
     const id = Number(btn.dataset.appId);
@@ -1943,6 +2003,7 @@ if(appsTableBodyEl){
       <p><strong>Date:</strong> ${escapeHtml(formatSampleDate(app.date))}</p>
       <p><strong>Source:</strong> ${escapeHtml(app.source)}</p>
       <p><strong>Location:</strong> ${escapeHtml(app.location || 'Remote')}</p>
+      ${app.coverLetter ? `<p><strong>Cover Letter:</strong><br>${escapeHtml(app.coverLetter)}</p>` : ''}
     `);
   });
 }
