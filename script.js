@@ -1032,7 +1032,14 @@ async function runWorkflow(){
   const matchedJobs = scoredJobs.filter(job=>job.matched);
   if(!matchedJobs.length){
     await executeWorkflowNode(null, 'd7', 'skipped', 'skipped');
-      markWorkflowNodesSkipped(['n8','n9','n10','n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','n18','pending','skip']);
+    markWorkflowNodesSkipped(['n8','n9','n10','n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','n18','pending','skip']);
+    const jobsFound = scoredJobs.length;
+    const jobsMatched = 0;
+    const jobsSkipped = scoredJobs.length;
+    const applicationsSent = 0;
+    addNotification('No Jobs Matched', 'No jobs met the configured minimum match score.');
+    addNotification('Workflow Completed', `${jobsFound} jobs were found, ${jobsMatched} matched the minimum score, and ${jobsSkipped} were skipped. No applications were sent.`);
+    renderNotifications();
     if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
     showToast('Workflow completed. No jobs matched the threshold.', 'info');
     return;
