@@ -679,6 +679,20 @@ function markWorkflowNodesSkipped(ids){
   ids.forEach(id=>markWorkflowNode(id,'skipped'));
 }
 
+function applySubmissionResultVisuals(submissionResult){
+  const branches = [
+    {key:'success', nodeId:'success', storeNodeId:'st-success'},
+    {key:'temporary_failure', nodeId:'tempfail', storeNodeId:'st-temp'},
+    {key:'manual_action_needed', nodeId:'manual', storeNodeId:'st-manual'},
+    {key:'permanent_failure', nodeId:'permfail', storeNodeId:'st-perm'}
+  ];
+  branches.forEach(branch=>{
+    const isActive = branch.key === submissionResult;
+    markWorkflowNode(branch.nodeId, isActive ? 'completed' : 'skipped');
+    markWorkflowNode(branch.storeNodeId, isActive ? 'completed' : 'skipped');
+  });
+}
+
 function setJobExecutionState(job, state){
   if(!job) return;
   job.executionState = state;
@@ -906,6 +920,7 @@ async function resumeApprovalWorkflow(app){
 
   setJobExecutionState(job, 'applying');
   await executeWorkflowNode(job, 'n14', 'applying', 'completed');
+  await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
 
   const submissionResult = resolveSubmissionResult(job, profileState);
   const branchNodes = [
@@ -914,11 +929,7 @@ async function resumeApprovalWorkflow(app){
     {key:'manual_action_needed', nodeId:'manual', storeNodeId:'st-manual'},
     {key:'permanent_failure', nodeId:'permfail', storeNodeId:'st-perm'}
   ];
-  branchNodes.forEach(branch=>{
-    const isActive = branch.key === submissionResult;
-    markWorkflowNode(branch.nodeId, isActive ? 'completed' : 'skipped');
-    markWorkflowNode(branch.storeNodeId, isActive ? 'completed' : 'skipped');
-  });
+  applySubmissionResultVisuals(submissionResult);
 
   switch(submissionResult){
     case 'success':
@@ -1107,19 +1118,10 @@ async function runWorkflow(){
 
     await executeWorkflowNode(job, 'd13', 'applying', 'skipped');
     await executeWorkflowNode(job, 'n14', 'applying', 'completed');
+    await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
 
     const submissionResult = resolveSubmissionResult(job, profileState);
-    const branchNodes = [
-      {key:'success', nodeId:'success', storeNodeId:'st-success'},
-      {key:'temporary_failure', nodeId:'tempfail', storeNodeId:'st-temp'},
-      {key:'manual_action_needed', nodeId:'manual', storeNodeId:'st-manual'},
-      {key:'permanent_failure', nodeId:'permfail', storeNodeId:'st-perm'}
-    ];
-    branchNodes.forEach(branch=>{
-      const isActive = branch.key === submissionResult;
-      markWorkflowNode(branch.nodeId, isActive ? 'completed' : 'skipped');
-      markWorkflowNode(branch.storeNodeId, isActive ? 'completed' : 'skipped');
-    });
+    applySubmissionResultVisuals(submissionResult);
 
     switch(submissionResult){
       case 'success':
