@@ -282,26 +282,118 @@
 </div>
 
 <div id="dashboardPage" class="page-view" hidden>
-  <div class="placeholder-page">
-    <div class="placeholder-icon">📊</div>
-    <h2>Dashboard</h2>
-    <p>Your application stats and activity overview will live here.</p>
+  <div class="dash-shell">
+    <div class="profile-header">
+      <div class="profile-header-left">
+        <div class="profile-title-icon" style="background:var(--blue);">📊</div>
+        <div>
+          <h2>Dashboard</h2>
+          <p>Overview of your automated job search activity</p>
+        </div>
+      </div>
+      <div class="profile-header-right">
+        <div class="profile-last-updated"><span class="profile-last-updated-icon">📅</span> <span id="dashUpdated">Updated just now</span></div>
+      </div>
+    </div>
+
+    <div class="dash-grid" id="dashStatsGrid"></div>
+
+    <div class="dash-columns">
+      <section class="profile-card dash-card-section">
+        <div class="profile-card-title"><span class="pc-icon pc-icon-blue">🕒</span>Recent Activity</div>
+        <div class="activity-list" id="dashActivityList"></div>
+      </section>
+
+      <section class="profile-card dash-card-section">
+        <div class="profile-card-title"><span class="pc-icon pc-icon-green">📈</span>Application Status</div>
+        <div class="bar-list" id="dashStatusBars"></div>
+      </section>
+    </div>
+
+    <section class="profile-card">
+      <div class="profile-card-title"><span class="pc-icon pc-icon-purple">⚡</span>Quick Actions</div>
+      <div class="quick-actions-row">
+        <button class="quick-action-btn" type="button" data-page="workflow">🛠 Open Workflow</button>
+        <button class="quick-action-btn" type="button" data-page="applications">🗂 Open Applications</button>
+        <button class="quick-action-btn" type="button" data-page="profile">👤 Open Profile</button>
+      </div>
+    </section>
   </div>
 </div>
 
 <div id="applicationsPage" class="page-view" hidden>
-  <div class="placeholder-page">
-    <div class="placeholder-icon">🗂️</div>
-    <h2>Applications</h2>
-    <p>Track every job application submitted by the automation workflow here.</p>
+  <div class="dash-shell">
+    <div class="profile-header">
+      <div class="profile-header-left">
+        <div class="profile-title-icon" style="background:var(--green);">🗂️</div>
+        <div>
+          <h2>Applications</h2>
+          <p>Track every job application submitted by the automation workflow</p>
+        </div>
+      </div>
+    </div>
+
+    <section class="profile-card">
+      <div class="apps-toolbar">
+        <input id="appsSearchInput" class="field-input apps-search" type="text" placeholder="Search by job title or company...">
+        <select id="appsStatusFilter" class="field-input apps-filter">
+          <option value="All">All Statuses</option>
+          <option value="Success">Success</option>
+          <option value="Pending Review">Pending Review</option>
+          <option value="Temporary Failure">Temporary Failure</option>
+          <option value="Permanent Failure">Permanent Failure</option>
+        </select>
+      </div>
+      <div class="apps-table-wrap">
+        <table class="apps-table">
+          <thead>
+            <tr>
+              <th>Job Title</th>
+              <th>Company</th>
+              <th>Match Score</th>
+              <th>Date</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="appsTableBody"></tbody>
+        </table>
+      </div>
+      <div id="appsEmptyState" class="apps-empty" hidden>No applications match your search or filter.</div>
+    </section>
   </div>
 </div>
 
 <div id="analyticsPage" class="page-view" hidden>
-  <div class="placeholder-page">
-    <div class="placeholder-icon">📈</div>
-    <h2>Analytics</h2>
-    <p>Match-score trends, response rates, and other insights will appear here.</p>
+  <div class="dash-shell">
+    <div class="profile-header">
+      <div class="profile-header-left">
+        <div class="profile-title-icon" style="background:var(--purple);">📈</div>
+        <div>
+          <h2>Analytics</h2>
+          <p>Match-score trends, response rates, and other insights</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="dash-grid" id="analyticsStatsGrid"></div>
+
+    <div class="dash-columns">
+      <section class="profile-card dash-card-section">
+        <div class="profile-card-title"><span class="pc-icon pc-icon-blue">📊</span>Applications by Status</div>
+        <div class="bar-list" id="analyticsStatusBars"></div>
+      </section>
+
+      <section class="profile-card dash-card-section">
+        <div class="profile-card-title"><span class="pc-icon pc-icon-indigo">🌐</span>Applications by Source</div>
+        <div class="bar-list" id="analyticsSourceBars"></div>
+      </section>
+    </div>
+
+    <section class="profile-card">
+      <div class="profile-card-title"><span class="pc-icon pc-icon-green">🧾</span>Recent Performance Summary</div>
+      <div id="analyticsSummaryText" class="analytics-summary-text"></div>
+    </section>
   </div>
 </div>
 
