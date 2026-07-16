@@ -689,6 +689,10 @@ const jobProviderService = {
           const remote = remoteOptions[Math.floor(Math.random()*remoteOptions.length)];
           const source = sources[Math.floor(Math.random()*sources.length)];
           const salary = salaryRanges[Math.floor(Math.random()*salaryRanges.length)];
+          const safeCompany = company.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+          const safeRole = role.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+          const applicationUrl = `https://apply.${safeCompany}.example.com/${safeRole}-${Date.now()}-${i}`;
+          const requiresManualAction = Math.random() < 0.12 || (source.toLowerCase().includes('monster') && Math.random() < 0.35);
           jobs.push({
             id:`provider-job-${Date.now()}-${i}`,
             company,
@@ -699,10 +703,12 @@ const jobProviderService = {
             jobType: 'Full-time',
             remote,
             description: `Opportunity for a ${role.toLowerCase()} role focused on impact, collaboration, and shipping high quality work.`,
-            applicationUrl: '',
+            applicationUrl,
+            applyUrl: applicationUrl,
             source,
             postedDate: new Date().toISOString().slice(0,10),
-            automationPossible: Boolean(profile.resumeUploaded)
+            automationPossible: Boolean(profile.resumeUploaded),
+            requiresManualAction
           });
         }
         return jobs;
@@ -735,6 +741,7 @@ function normalizeJobFromProvider(job, context = {}){
     source: job.source || 'Provider',
     postedDate: job.postedDate || new Date().toISOString().slice(0,10),
     automationPossible: job.automationPossible !== undefined ? job.automationPossible : Boolean((context.profile || {}).resumeUploaded),
+    requiresManualAction: Boolean(job.requiresManualAction),
     matchScore: 0,
     matched: false,
     demo: false
@@ -1034,17 +1041,56 @@ function buildApplicationResult(job, attemptNumber = 0, profileStateOverride, ra
   }
   const state = profileStateOverride || profileState || {};
   const autoApply = state.autoApply !== false;
-  const applicationUrl = String(job && (job.applicationUrl || job.applyUrl) || '').trim();
+  const applicationUrl = String(job && (job.applicationUrl || job.applyUrl || job.url) || '').trim();
   const baseScore = Number(job && job.matchScore) || 0;
   if(!autoApply) return 'Manual Action Needed';
-  if(!job || !applicationUrl || !isValidUrl(applicationUrl)) return 'Manual Action Needed';
+  if(!job) {
+    console.warn('[Submission Result] missing job data, defaulting to Temporary Failure');
+    return 'Temporary Failure';
+  }
   if(!state.resumeUploaded) return 'Manual Action Needed';
   const source = String(job.source || '').toLowerCase();
-  if(source.includes('glassdoor')) return 'Permanent Failure';
-  if(source.includes('indeed') && attemptNumber > 0) return 'Temporary Failure';
-  if(source.includes('monster')) return 'Manual Action Needed';
-  if(baseScore >= Number(state.minMatchScore || 75) && attemptNumber === 0) return 'Success';
-  return 'Temporary Failure';
+  const random = typeof randomProvider === 'function' ? randomProvider() : Math.random();
+  if(!applicationUrl || !isValidUrl(applicationUrl)){
+    console.debug(`[Submission Result] job lacks valid application URL for ${job.jobTitle || job.title} @ ${job.company}; continuing simulation.`);
+  }
+  if(job.requiresManualAction){
+    console.log('[Submission Result] Manual Action Needed by explicit job requirement', {job:job.jobTitle, company:job.company, source, requiresManualAction: job.requiresManualAction, applicationUrl});
+    return 'Manual Action Needed';
+  }
+  if(source.includes('glassdoor')){
+    console.log('[Submission Result] Permanent Failure by source rule', {job:job.jobTitle, company:job.company, source, applicationUrl});
+    return 'Permanent Failure';
+  }
+  if(source.includes('indeed') && attemptNumber > 0){
+    console.log('[Submission Result] Temporary Failure by Indeed retry rule', {job:job.jobTitle, company:job.company, source, attemptNumber, applicationUrl});
+    return 'Temporary Failure';
+  }
+
+  const threshold = Number(state.minMatchScore || 75);
+  if(baseScore >= threshold){
+    if(random < 0.55){
+      console.log('[Submission Result] Success by score', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
+      return 'Success';
+    }
+    if(random < 0.80){
+      console.log('[Submission Result] Temporary Failure by score logic', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
+      return 'Temporary Failure';
+    }
+    console.log('[Submission Result] Permanent Failure by score logic', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
+    return 'Permanent Failure';
+  }
+
+  if(random < 0.20){
+    console.log('[Submission Result] Success by fallback chance', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
+    return 'Success';
+  }
+  if(random < 0.65){
+    console.log('[Submission Result] Temporary Failure by fallback chance', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
+    return 'Temporary Failure';
+  }
+  console.log('[Submission Result] Permanent Failure by fallback chance', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
+  return 'Permanent Failure';
 }
 
 function syncWorkflowUi(){
