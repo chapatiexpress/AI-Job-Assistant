@@ -411,6 +411,64 @@ const DEFAULT_APP_STATE = {
   settings:{nextJobId:101,nextApplicationId:1,pageSize:8,demoMode:false}
 };
 
+function fallbackText(value, fallback){
+  const normalized = String(value ?? '').trim();
+  return normalized ? normalized : fallback;
+}
+
+function normalizeApplicationRecord(input = {}, fallbackJob = null){
+  const source = input && typeof input === 'object' ? input : {};
+  const fallback = fallbackJob && typeof fallbackJob === 'object' ? fallbackJob : {};
+  const title = fallbackText(source.jobTitle || source.title || fallback.jobTitle || fallback.title || source.role || source.position, 'Job Opportunity');
+  const company = fallbackText(source.company || fallback.company || 'Unknown Company', 'Unknown Company');
+  const location = fallbackText(source.location || fallback.location || source.workLocation || 'Remote', 'Remote');
+  const sourceName = fallbackText(source.source || fallback.source || source.provider || 'Unknown Source', 'Unknown Source');
+  const employmentType = fallbackText(source.employmentType || source.jobType || fallback.employmentType || fallback.jobType || 'Full-time', 'Full-time');
+  const experienceLevel = fallbackText(source.experienceLevel || source.experience || fallback.experienceLevel || fallback.experience || 'Mid Level', 'Mid Level');
+  const rawDateValue = source.date || source.postedDate || source.createdAt || source.dateTime || fallback.date || fallback.postedDate || new Date().toISOString();
+  const parsedDate = new Date(rawDateValue);
+  const dateValue = !Number.isNaN(parsedDate) ? parsedDate.toISOString().slice(0,10) : fallbackText(String(rawDateValue || '').slice(0,10), new Date().toISOString().slice(0,10));
+  const timeValue = fallbackText(source.time || source.createdTime || (source.dateTime && String(source.dateTime).split(' ').slice(1).join(' ') || ''), parsedDate && !Number.isNaN(parsedDate) ? parsedDate.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}) : new Date().toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}));
+  const dateTimeValue = fallbackText(source.dateTime || `${dateValue} ${timeValue}`, `${dateValue} ${timeValue}`);
+  const matchScoreValue = Number.isFinite(Number(source.matchScore ?? fallback.matchScore ?? 0)) ? Number(source.matchScore ?? fallback.matchScore ?? 0) : 0;
+  const statusValue = fallbackText(source.status || fallback.status || 'Pending Review', 'Pending Review');
+  const applyUrlValue = fallbackText(source.applyUrl || fallback.applyUrl || source.url || fallback.url || 'https://jobs.example.com/apply', 'https://jobs.example.com/apply');
+  const resumeUsedValue = Boolean(source.resumeUsed ?? source.resumeUploaded ?? source.resumeDataUrl ?? fallback.resumeUploaded ?? fallback.resumeDataUrl ?? source.resumeFileName ?? fallback.resumeFileName);
+  const coverLetterUsedValue = Boolean(source.coverLetterUsed ?? source.coverLetter ?? source.autoCover ?? fallback.coverLetter ?? fallback.autoCover ?? source.coverLetterText ?? fallback.coverLetterText);
+  const normalized = {
+    ...source,
+    ...fallback,
+    id: source.id ?? fallback.id ?? 0,
+    jobId: source.jobId ?? fallback.jobId ?? source.id ?? fallback.id ?? 0,
+    jobTitle: title,
+    title,
+    company,
+    location,
+    source: sourceName,
+    applyUrl: applyUrlValue,
+    matchScore: matchScoreValue,
+    status: statusValue,
+    date: dateValue,
+    time: timeValue,
+    dateTime: dateTimeValue,
+    employmentType,
+    experienceLevel,
+    resumeUsed: resumeUsedValue,
+    coverLetterUsed: coverLetterUsedValue,
+    retryCount: Number(source.retryCount ?? fallback.retryCount ?? 0) || 0,
+    notes: fallbackText(source.notes || fallback.notes || '', 'No notes yet.')
+  };
+  if(!normalized.jobTitle) normalized.jobTitle = 'Job Opportunity';
+  if(!normalized.company) normalized.company = 'Unknown Company';
+  if(!normalized.location) normalized.location = 'Remote';
+  if(!normalized.source) normalized.source = 'Unknown Source';
+  if(!normalized.status) normalized.status = 'Pending Review';
+  if(!normalized.employmentType) normalized.employmentType = 'Full-time';
+  if(!normalized.experienceLevel) normalized.experienceLevel = 'Mid Level';
+  if(!normalized.applyUrl) normalized.applyUrl = 'https://jobs.example.com/apply';
+  return normalized;
+}
+
 function loadAppState(){
   try{
     const saved = JSON.parse(localStorage.getItem(APP_STORAGE_KEY) || 'null');
@@ -421,8 +479,8 @@ function loadAppState(){
         workflowSettings: cleaned.workflowSettings || {},
         notifications: Array.isArray(cleaned.notifications)?cleaned.notifications:DEFAULT_APP_STATE.notifications.slice(),
         activity: Array.isArray(cleaned.activity)?cleaned.activity:DEFAULT_APP_STATE.activity.slice(),
-        jobs: Array.isArray(cleaned.jobs)?cleaned.jobs:DEFAULT_APP_STATE.jobs.slice(),
-        applications: Array.isArray(cleaned.applications)?cleaned.applications:DEFAULT_APP_STATE.applications.slice(),
+        jobs: Array.isArray(cleaned.jobs)?cleaned.jobs.map(job=>normalizeApplicationRecord(job, job)):DEFAULT_APP_STATE.jobs.slice(),
+        applications: Array.isArray(cleaned.applications)?cleaned.applications.map(app=>normalizeApplicationRecord(app)):DEFAULT_APP_STATE.applications.slice(),
         settings:{...DEFAULT_APP_STATE.settings, ...(cleaned.settings||{})}
       };
     }
@@ -454,8 +512,8 @@ function saveAppState(){
   if(allSettings && typeof allSettings === 'object'){
     allSettings.workflowState = workflowState;
   }
-  appState.jobs = jobsData;
-  appState.applications = sampleApplications;
+  appState.jobs = (jobsData || []).map(job=>normalizeApplicationRecord(job, job));
+  appState.applications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
   localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState));
 }
 
@@ -945,7 +1003,7 @@ async function highlightNode(id, status='completed', duration=750){
 
 function createApplicationRecord(job, status, extra = {}){
   const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
-  const application = {
+  const application = normalizeApplicationRecord({
     id: nextId,
     jobTitle: job.jobTitle || job.title,
     company: job.company,
@@ -960,7 +1018,7 @@ function createApplicationRecord(job, status, extra = {}){
     retryCount: extra.retryCount || 0,
     demo:false,
     ...extra
-  };
+  }, job);
   appState.settings.nextApplicationId = nextId + 1;
   return application;
 }
@@ -968,33 +1026,36 @@ function createApplicationRecord(job, status, extra = {}){
 function persistApplication(job, status, extra = {}){
   const existing = sampleApplications.find(app => app.jobId === job.id || (app.jobTitle === (job.jobTitle || job.title) && app.company === job.company && app.location === job.location && app.source === job.source));
   const application = existing || createApplicationRecord(job, status, extra);
-  application.jobId = job.id;
-  application.jobTitle = job.jobTitle || job.title;
-  application.company = job.company;
-  application.location = job.location;
-  application.source = job.source;
-  application.applyUrl = job.applyUrl || application.applyUrl || '';
-  application.matchScore = Number(job.matchScore) || application.matchScore || 0;
-  application.date = application.date || new Date().toISOString().slice(0,10);
-  application.status = status;
-  application.coverLetter = extra.coverLetter !== undefined ? extra.coverLetter : (application.coverLetter || (profileState.autoCover ? createCoverLetter(job) : ''));
-  application.manualReviewRequired = extra.manualReviewRequired !== undefined ? extra.manualReviewRequired : Boolean(application.manualReviewRequired);
-  application.skipReason = extra.skipReason || application.skipReason || '';
-  application.failureReason = extra.failureReason || application.failureReason || '';
-  application.retryCount = extra.retryCount !== undefined ? extra.retryCount : (application.retryCount || 0);
-  application.nextRetryAt = extra.nextRetryAt || application.nextRetryAt || '';
-  application.confirmationMessage = extra.confirmationMessage || application.confirmationMessage || '';
-  application.submittedAt = extra.submittedAt || application.submittedAt || '';
-  application.notes = extra.notes || application.notes || '';
-  application.workflowJobKey = getWorkflowJobKey(job);
-  application.demo = false;
-  if(!existing){ sampleApplications.unshift(application); }
-  else { const index = sampleApplications.indexOf(existing); if(index > -1){ sampleApplications.splice(index,1); sampleApplications.unshift(application); } }
+  const normalized = normalizeApplicationRecord({
+    ...application,
+    jobId: job.id,
+    jobTitle: job.jobTitle || job.title,
+    company: job.company,
+    location: job.location,
+    source: job.source,
+    applyUrl: job.applyUrl || application.applyUrl || '',
+    matchScore: Number(job.matchScore) || application.matchScore || 0,
+    date: application.date || new Date().toISOString().slice(0,10),
+    status,
+    coverLetter: extra.coverLetter !== undefined ? extra.coverLetter : (application.coverLetter || (profileState.autoCover ? createCoverLetter(job) : '')),
+    manualReviewRequired: extra.manualReviewRequired !== undefined ? extra.manualReviewRequired : Boolean(application.manualReviewRequired),
+    skipReason: extra.skipReason || application.skipReason || '',
+    failureReason: extra.failureReason || application.failureReason || '',
+    retryCount: extra.retryCount !== undefined ? extra.retryCount : (application.retryCount || 0),
+    nextRetryAt: extra.nextRetryAt || application.nextRetryAt || '',
+    confirmationMessage: extra.confirmationMessage || application.confirmationMessage || '',
+    submittedAt: extra.submittedAt || application.submittedAt || '',
+    notes: extra.notes || application.notes || '',
+    workflowJobKey: getWorkflowJobKey(job),
+    demo: false
+  }, job);
+  if(!existing){ sampleApplications.unshift(normalized); }
+  else { const index = sampleApplications.indexOf(existing); if(index > -1){ sampleApplications.splice(index,1); sampleApplications.unshift(normalized); } }
   saveAppState();
   renderApplicationsTable();
   renderDashboard();
   renderAnalytics();
-  return application;
+  return normalized;
 }
 
 async function resumeApprovalWorkflow(app, decision = 'approve'){
@@ -1389,7 +1450,7 @@ function loadMoreApplications(){
   const extra = [
     {id: nextId, jobTitle:'Full Stack Developer', company:'Violet Works', location:'Austin, TX', source:'Glassdoor', matchScore:78, date:'2026-07-06', status:'Temporary Failure'},
     {id: nextId+1, jobTitle:'Product Designer', company:'Crescent Labs', location:'Remote', source:'LinkedIn', matchScore:82, date:'2026-07-05', status:'Pending Review'},
-  ];
+  ].map(item=>normalizeApplicationRecord(item));
   sampleApplications.push(...extra);
   appState.settings.nextApplicationId = nextId + extra.length;
   saveAppState();
@@ -2227,22 +2288,24 @@ function daysSince(dateStr){
 }
 
 function computeDashboardStats(){
-  const jobs = appState.jobs || [];
+  const jobs = (appState.jobs || []).map(job=>normalizeApplicationRecord(job, job));
+  const applications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
   return {
     jobsFound: jobs.length,
-    jobsMatched: jobs.filter(j=>j.matched).length,
-    applicationsSent: sampleApplications.filter(a=>['Success','Temporary Failure','Permanent Failure'].includes(a.status)).length,
-    pendingReviews: sampleApplications.filter(a=>['Pending Review','Manual Action Needed'].includes(a.status)).length,
-    successful: sampleApplications.filter(a=>a.status==='Success').length,
-    failed: sampleApplications.filter(a=>a.status==='Temporary Failure' || a.status==='Permanent Failure').length,
+    jobsMatched: jobs.filter(j=>Boolean(j.matched)).length,
+    applicationsSent: applications.filter(a=>['Success','Temporary Failure','Permanent Failure'].includes(a.status)).length,
+    pendingReviews: applications.filter(a=>['Pending Review','Manual Action Needed'].includes(a.status)).length,
+    successful: applications.filter(a=>a.status==='Success').length,
+    failed: applications.filter(a=>a.status==='Temporary Failure' || a.status==='Permanent Failure').length,
   };
 }
 
 function buildStatusBarsHtml(){
-  if(sampleApplications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
-  const total = sampleApplications.length;
+  const applications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
+  if(applications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
+  const total = applications.length;
   return STATUS_ORDER.map(status=>{
-    const count = sampleApplications.filter(a=>a.status===status).length;
+    const count = applications.filter(a=>a.status===status).length;
     const pct = total ? Math.round((count/total)*100) : 0;
     const meta = STATUS_META[status];
     return `<div class="bar-row">
@@ -2254,11 +2317,12 @@ function buildStatusBarsHtml(){
 }
 
 function buildSourceBarsHtml(){
-  if(sampleApplications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
-  const total = sampleApplications.length;
-  const sources = [...new Set(sampleApplications.map(a=>a.source))];
+  const applications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
+  if(applications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
+  const total = applications.length;
+  const sources = [...new Set(applications.map(a=>a.source))];
   return sources.map(source=>{
-    const count = sampleApplications.filter(a=>a.source===source).length;
+    const count = applications.filter(a=>a.source===source).length;
     const pct = total ? Math.round((count/total)*100) : 0;
     return `<div class="bar-row">
       <div class="bar-label">${escapeHtml(source)}</div>
@@ -2290,14 +2354,14 @@ function renderDashboard(){
 
   const activityList = document.getElementById('dashActivityList');
   if(activityList){
-    const recent = [...sampleApplications].sort((a,b)=> new Date(b.date)-new Date(a.date)).slice(0,6);
+    const recent = (sampleApplications || []).map(app=>normalizeApplicationRecord(app)).sort((a,b)=> new Date(b.dateTime || b.date)-new Date(a.dateTime || a.date)).slice(0,6);
     activityList.innerHTML = recent.length ? recent.map(a=>{
       const meta = STATUS_META[a.status] || {cls:'',icon:''};
       return `<div class="activity-item">
         <div class="activity-icon ${meta.cls}">${meta.icon}</div>
         <div class="activity-body">
           <div class="activity-title">${escapeHtml(a.jobTitle)} — ${escapeHtml(a.company)}</div>
-          <div class="activity-meta">${escapeHtml(a.status)} • ${escapeHtml(formatSampleDate(a.date))}</div>
+          <div class="activity-meta">${escapeHtml(a.status)} • ${escapeHtml(formatSampleDate(a.date))} • ${escapeHtml(a.time)}</div>
         </div>
       </div>`;
     }).join('') : '<div class="apps-empty">No recent activity yet.</div>';
@@ -2325,8 +2389,9 @@ function renderApplicationsTable(){
   const sortBy = (appsSortByEl && appsSortByEl.value) || 'date';
   const sortOrder = (appsSortOrderEl && appsSortOrderEl.value) || 'desc';
 
-  const filtered = sampleApplications.filter(a=>{
-    const matchesQuery = !query || a.jobTitle.toLowerCase().includes(query) || a.company.toLowerCase().includes(query);
+  const normalizedApplications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
+  const filtered = normalizedApplications.filter(a=>{
+    const matchesQuery = !query || String(a.jobTitle || '').toLowerCase().includes(query) || String(a.company || '').toLowerCase().includes(query);
     const matchesStatus = statusFilter === 'All' || a.status === statusFilter;
     const matchesSource = sourceFilter === 'All' || a.source === sourceFilter;
     return matchesQuery && matchesStatus && matchesSource;
@@ -2351,7 +2416,7 @@ function renderApplicationsTable(){
       <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
       <td data-label="Company">${escapeHtml(a.company)}</td>
       <td data-label="Match Score"><span class="match-score-pill">${a.matchScore}%</span></td>
-      <td data-label="Date">${escapeHtml(formatSampleDate(a.date))}</td>
+      <td data-label="Date">${escapeHtml(`${formatSampleDate(a.date)} • ${a.time}`)}</td>
       <td data-label="Status"><span class="status-badge ${meta.cls}">${meta.icon} ${escapeHtml(a.status)}</span></td>
       <td data-label="Action">
         <button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button>
@@ -2373,11 +2438,12 @@ function renderApplicationsTable(){
 function renderAnalytics(){
   const grid = document.getElementById('analyticsStatsGrid');
   if(!grid) return;
-  const total = sampleApplications.length;
-  const successCount = sampleApplications.filter(a=>a.status==='Success').length;
+  const applications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
+  const total = applications.length;
+  const successCount = applications.filter(a=>a.status==='Success').length;
   const successRate = total ? Math.round((successCount/total)*100) : 0;
-  const avgMatch = total ? Math.round(sampleApplications.reduce((sum,a)=>sum+a.matchScore,0)/total) : 0;
-  const thisWeek = sampleApplications.filter(a=>daysSince(a.date) <= 7).length;
+  const avgMatch = total ? Math.round(applications.reduce((sum,a)=>sum+a.matchScore,0)/total) : 0;
+  const thisWeek = applications.filter(a=>daysSince(a.date) <= 7).length;
 
   const cards = [
     {label:'Total Applications',        value:total,          icon:'📤', color:'#2563eb'},
@@ -2430,7 +2496,7 @@ if(appsTableBodyEl){
     const approveBtn = e.target.closest('[data-action="approve-application"]');
     if(approveBtn){
       const id = Number(approveBtn.dataset.appId);
-      const app = sampleApplications.find(a=>a.id===id);
+      const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===id));
       if(app && app.status === 'Pending Review'){
         app.status = 'Approved';
         app.manualReviewRequired = false;
@@ -2452,7 +2518,7 @@ if(appsTableBodyEl){
     const rejectBtn = e.target.closest('[data-action="reject-application"]');
     if(rejectBtn){
       const id = Number(rejectBtn.dataset.appId);
-      const app = sampleApplications.find(a=>a.id===id);
+      const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===id));
       if(app && app.status === 'Pending Review'){
         app.status = 'Rejected';
         app.manualReviewRequired = false;
@@ -2471,14 +2537,17 @@ if(appsTableBodyEl){
     const btn = e.target.closest('.apps-action-btn');
     if(!btn) return;
     const id = Number(btn.dataset.appId);
-    const app = sampleApplications.find(a=>a.id===id);
+    const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===id));
     if(!app) return;
     openModal(`${app.jobTitle} at ${app.company}`, `
       <p><strong>Match Score:</strong> ${app.matchScore}%</p>
       <p><strong>Status:</strong> ${escapeHtml(app.status)}</p>
-      <p><strong>Date:</strong> ${escapeHtml(formatSampleDate(app.date))}</p>
+      <p><strong>Date:</strong> ${escapeHtml(`${formatSampleDate(app.date)} • ${app.time}`)}</p>
       <p><strong>Source:</strong> ${escapeHtml(app.source)}</p>
-      <p><strong>Location:</strong> ${escapeHtml(app.location || 'Remote')}</p>
+      <p><strong>Location:</strong> ${escapeHtml(app.location)}</p>
+      <p><strong>Employment Type:</strong> ${escapeHtml(app.employmentType)}</p>
+      <p><strong>Experience Level:</strong> ${escapeHtml(app.experienceLevel)}</p>
+      <p><strong>Apply URL:</strong> <a href="${escapeHtml(app.applyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(app.applyUrl)}</a></p>
       ${app.coverLetter ? `<p><strong>Cover Letter:</strong><br>${escapeHtml(app.coverLetter)}</p>` : ''}
     `);
   });
