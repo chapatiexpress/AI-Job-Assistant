@@ -1050,6 +1050,7 @@ async function runWorkflow(){
   const dailyLimit = Number(profileState.dailyLimit) || 30;
   let applicationsCount = 0;
   let completedJobs = 0;
+  let waitingForNextScan = false;
 
   for(const job of matchedJobs){
     const jobKey = `${job.jobTitle}|${job.company}|${job.location}`;
@@ -1096,7 +1097,10 @@ async function runWorkflow(){
     await executeWorkflowNode(job, 'n10', 'checking_limits', 'completed');
     if(applicationsCount >= dailyLimit){
       markWorkflowNodesSkipped(['n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','pending','skip']);
-      await executeWorkflowNode(job, 'n19', 'completed', 'completed');
+      await executeWorkflowNode(job, 'n19', 'pending', 'pending');
+      addActivity('Daily limit reached. Waiting for the next scan cycle.');
+      addNotification('Waiting for Next Scan', 'Daily application limit reached. The workflow is waiting for the next scan.');
+      waitingForNextScan = true;
       break;
     }
 
@@ -1195,14 +1199,14 @@ async function runWorkflow(){
     }
   }
 
-  if(completedJobs >= matchedJobs.length){
+  if(!waitingForNextScan && completedJobs >= matchedJobs.length){
     await executeWorkflowNode(null, 'n19', 'completed', 'completed');
   }
 
   renderNotifications();
   workflowRunning = false;
   if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-  showToast('Workflow completed.', 'success');
+  showToast(waitingForNextScan ? 'Workflow paused until next scan.' : 'Workflow completed.', waitingForNextScan ? 'info' : 'success');
 }
 
 function resetDemoData(){
