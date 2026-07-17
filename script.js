@@ -2012,7 +2012,7 @@ if(allSettings && allSettings.workflowState && typeof allSettings.workflowState 
 const fieldConfigs = {
   n1: [ // Trigger
     {key:'triggerType', label:'Trigger Type', type:'select', options:['Manual','Schedule'], default:'Schedule'},
-    {key:'scanFrequency', label:'Scan Frequency', type:'select', options:['Every 15 minutes','Hourly','Every 6 hours','Daily'], default:'Hourly'},
+    {key:'scanFrequency', label:'Scan Frequency', type:'select', options:['Off','1 Minute','2 Minutes','3 Minutes','4 Minutes','5 Minutes','10 Minutes','15 Minutes','30 Minutes','1 Hour','2 Hours','4 Hours','6 Hours','12 Hours','24 Hours'], default:'15 Minutes'},
   ],
   n2: [ // Load Profile and Resume
     {key:'resume', label:'Resume', type:'text', default:'', readonly:true},
@@ -3289,3 +3289,138 @@ renderAnalytics();
 renderNotifications();
 updateNotificationBadge();
 updateTopNavUser();
+
+/* =====================================================================
+   SCHEDULER ENGINE
+   Manages a single auto-scan timer wired to the #schedIntervalSelect
+   dropdown. Rules enforced:
+     - Only ONE timer is ever active at a time (no duplicates).
+     - Changing the interval cancels the current timer and starts a new one.
+     - Selected interval persists via allSettings across page reloads.
+     - After each workflow run the scheduler re-arms itself automatically.
+     - "Off" (value 0) disables auto-scan entirely.
+   ===================================================================== */
+
+/* Internal state — only one timer handle ever exists at a time. */
+let _schedTimerId   = null;   // active setTimeout handle
+let _schedIntervalMs = 0;     // currently armed interval in ms
+let _schedFireAt    = 0;      // epoch ms when the timer will fire
+let _schedTickTimer = null;   // 1-second ticker for the countdown label
+
+/* formatCountdown(ms) — converts remaining ms to human-readable string */
+function formatCountdown(ms){
+  if(ms <= 0) return 'firing\u2026';
+  const totalSec = Math.ceil(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if(h > 0) return `${h}h ${m}m ${s}s`;
+  if(m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+/* updateSchedNextLabel() — refreshes the countdown display every second */
+function updateSchedNextLabel(){
+  const label = document.getElementById('schedNextLabel');
+  if(!label) return;
+  if(_schedIntervalMs === 0 || _schedFireAt === 0){ label.textContent = ''; return; }
+  label.textContent = 'Next: ' + formatCountdown(_schedFireAt - Date.now());
+}
+
+/* 1-second UI ticker start/stop helpers */
+function startSchedTick(){ stopSchedTick(); updateSchedNextLabel(); _schedTickTimer = setInterval(updateSchedNextLabel, 1000); }
+function stopSchedTick(){ if(_schedTickTimer !== null){ clearInterval(_schedTickTimer); _schedTickTimer = null; } }
+
+/* clearSchedTimer() — cancels the active timeout and clears the display */
+function clearSchedTimer(){
+  if(_schedTimerId !== null){ clearTimeout(_schedTimerId); _schedTimerId = null; }
+  _schedFireAt = 0;
+  stopSchedTick();
+  updateSchedNextLabel();
+}
+
+/* armScheduler(intervalMs) — arms ONE fresh timeout.
+   Always called after clearSchedTimer() so duplicates are impossible. */
+function armScheduler(intervalMs){
+  clearSchedTimer();
+  _schedIntervalMs = intervalMs;
+  if(intervalMs <= 0) return;
+  _schedFireAt = Date.now() + intervalMs;
+  _schedTimerId = setTimeout(async () => {
+    _schedTimerId = null;
+    _schedFireAt  = 0;
+    stopSchedTick();
+    updateSchedNextLabel();
+    /* Rule #7: Wait For Next Scan -> Trigger -> Load Profile -> ...
+       runWorkflow() already handles the scanWaiting handoff. */
+    if(!workflowRunning){
+      await runWorkflow();
+    }
+    /* Rule #8: after the workflow finishes, re-arm with the current interval. */
+    const currentMs = getSchedIntervalMs();
+    if(currentMs > 0) armScheduler(currentMs);
+  }, intervalMs);
+  startSchedTick();
+}
+
+/* getSchedIntervalMs() — reads the persisted interval from allSettings */
+function getSchedIntervalMs(){
+  const saved = allSettings && allSettings.schedIntervalMs;
+  if(saved !== undefined && saved !== null) return Number(saved);
+  const el = document.getElementById('schedIntervalSelect');
+  return el ? Number(el.value) : 0;
+}
+
+/* saveSchedInterval(ms) — persists selection to allSettings + localStorage */
+function saveSchedInterval(ms){
+  if(!allSettings) allSettings = {};
+  allSettings.schedIntervalMs = ms;
+  saveAppState();
+}
+
+/* initScheduler() — reads persisted interval, syncs select, arms timer. */
+function initScheduler(){
+  const select = document.getElementById('schedIntervalSelect');
+  if(!select) return;
+
+  /* Restore the previously saved interval (if any) */
+  const savedMs = getSchedIntervalMs();
+  if(savedMs > 0){
+    const matchingOpt = Array.from(select.options).find(o => Number(o.value) === savedMs);
+    if(matchingOpt) select.value = String(savedMs);
+  }
+
+  /* Wire up the change listener — cancel existing timer, start fresh one */
+  select.addEventListener('change', () => {
+    const ms = Number(select.value);
+    saveSchedInterval(ms);
+    if(ms <= 0){
+      clearSchedTimer();
+      _schedIntervalMs = 0;
+      showToast('Auto Scan disabled.', 'info');
+    } else {
+      armScheduler(ms);
+      const label = select.options[select.selectedIndex].text;
+      showToast('Auto Scan set to ' + label + '. Next run scheduled.', 'success');
+    }
+  });
+
+  /* Arm with the saved interval so the scheduler survives page reloads */
+  if(savedMs > 0) armScheduler(savedMs);
+}
+
+/* Inject minimal CSS for the scheduler block — no existing styles touched */
+(function injectSchedStyles(){
+  const s = document.createElement('style');
+  s.id = 'sched-styles';
+  s.textContent = [
+    '.sched-block{display:flex;flex-direction:column;gap:3px;padding:4px 0;}',
+    '.sched-label{font-size:10px;font-weight:600;letter-spacing:.06em;color:#64748b;text-transform:uppercase;padding-left:2px;}',
+    '.sched-select{font-size:11px;padding:4px 6px;border-radius:6px;border:1px solid var(--card-border,#e2e5eb);background:#fff;color:var(--text-title,#111827);cursor:pointer;width:100%;}',
+    '.sched-next{font-size:10px;color:#7c3aed;font-weight:600;min-height:14px;padding-left:2px;white-space:nowrap;}'
+  ].join('');
+  document.head.appendChild(s);
+})();
+
+/* Bootstrap the scheduler after all app state is initialised */
+initScheduler();
