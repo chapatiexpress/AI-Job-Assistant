@@ -1657,16 +1657,22 @@ async function completeScanCycle(pauseInfo) {
   workflowRunning = false;
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
-  // Rule #4: exact required toast text.
-  showToast('Workflow completed. Waiting for next scheduled scan.', 'info');
 
-  // Re-arm the scheduler so the next run happens automatically (Rule #8).
-  // Only if the Trigger node is configured for Schedule mode and is active.
-  const _schedMs = getSchedIntervalMs();
-  if (_schedMs > 0) {
-    armScheduler(_schedMs);
-    const _fireAt = new Date(Date.now() + _schedMs);
-    console.log('Next scan scheduled for:', _fireAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  // After workflowRunning = false, decide which scheduler to (re-)arm.
+  if (isRepeatMode()) {
+    // Repeat mode: use exactly one setTimeout ~2 seconds after completion.
+    // clearSchedTimer() first so no time-based timer can co-exist.
+    clearSchedTimer();
+    scheduleRepeatCycle();
+  } else {
+    // Normal scheduled mode: show the standard toast and re-arm the timer.
+    showToast('Workflow completed. Waiting for next scheduled scan.', 'info');
+    const _schedMs = getSchedIntervalMs();
+    if (_schedMs > 0) {
+      armScheduler(_schedMs);
+      const _fireAt = new Date(Date.now() + _schedMs);
+      console.log('Next scan scheduled for:', _fireAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    }
   }
 
   return { stats, check };
@@ -2022,7 +2028,7 @@ if (allSettings && allSettings.workflowState && typeof allSettings.workflowState
 const fieldConfigs = {
   n1: [ // Trigger
     { key: 'triggerType', label: 'Trigger Type', type: 'select', options: ['Manual', 'Schedule'], default: 'Schedule' },
-    { key: 'scanFrequency', label: 'Scan Frequency', type: 'select', options: ['Every 15 minutes', 'Hourly', 'Every 6 hours', 'Daily'], default: 'Hourly' },
+    { key: 'scanFrequency', label: 'Scan Frequency', type: 'select', options: ['Repeat', '1 Minute', '2 Minutes', '3 Minutes', '4 Minutes', '5 Minutes', '10 Minutes', 'Every 15 Minutes', 'Every 30 Minutes', 'Hourly', 'Every 2 Hours', 'Every 4 Hours', 'Every 6 Hours', 'Every 12 Hours', 'Daily'], default: 'Hourly' },
   ],
   n2: [ // Load Profile and Resume
     { key: 'resume', label: 'Resume', type: 'text', default: '', readonly: true },
@@ -2217,9 +2223,9 @@ document.addEventListener('click', (event) => {
     if (action === 'run-demo-scan') runDemoScan();
     if (action === 'add-demo-job') addDemoJob();
     if (action === 'run-workflow') runWorkflow();
-    if (action === 'pause-workflow') pauseWorkflow('manual');
+    if (action === 'pause-workflow') { clearRepeatTimeout(); pauseWorkflow('manual'); }  // Rule #10
     if (action === 'resume-workflow') { resumeWorkflow(); showToast('Workflow resumed.', 'success'); }
-    if (action === 'stop-workflow') { stopWorkflow('manual'); showToast('Workflow stopped.', 'info'); }
+    if (action === 'stop-workflow') { clearRepeatTimeout(); clearSchedTimer(); stopWorkflow('manual'); showToast('Workflow stopped.', 'info'); }  // Rule #10
     if (action === 'reset-demo-data') resetDemoData();
     return;
   }
@@ -2764,9 +2770,18 @@ document.getElementById('panelSave').addEventListener('click', () => {
     const isEnabled  = enabledVal;
     const isActive   = statusVal === 'Active';
     const isSchedule = savedType === 'Schedule';
+    const isRepeat   = savedFreq === 'Repeat';
     const ms = SCAN_FREQUENCY_MS[savedFreq] || 0;
 
-    if (isSchedule && isEnabled && isActive && ms > 0) {
+    // Always cancel any existing timers first (no duplicates).
+    clearSchedTimer();
+    clearRepeatTimeout();
+
+    if (isSchedule && isEnabled && isActive && isRepeat) {
+      // Repeat mode: no timer started now — it fires after each completed run.
+      showToast('Scheduler saved. Workflow will repeat after each completed run.', 'success');
+      console.log('Repeat mode enabled. Workflow will auto-restart after each completed run.');
+    } else if (isSchedule && isEnabled && isActive && ms > 0) {
       armScheduler(ms);
       const fireAt = new Date(Date.now() + ms);
       const timeStr = fireAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -2774,7 +2789,6 @@ document.getElementById('panelSave').addEventListener('click', () => {
       console.log('Next scan scheduled for:', timeStr);
       showToast('Scheduler updated. Next scan in ' + savedFreq.toLowerCase() + '.', 'success');
     } else {
-      clearSchedTimer();
       console.log('Scheduler stopped: trigger disabled, set to Manual, or frequency is Off.');
       if (!isSchedule) showToast('Trigger set to Manual. Auto Scan disabled.', 'info');
       else if (!isEnabled || !isActive) showToast('Trigger is disabled. Auto Scan stopped.', 'info');
@@ -3340,21 +3354,22 @@ updateTopNavUser();
 
 /* Label → milliseconds map (matches fieldConfigs.n1.scanFrequency options) */
 const SCAN_FREQUENCY_MS = {
-  'Off':      0,
-  '1 Minute':   60000,
-  '2 Minutes':  120000,
-  '3 Minutes':  180000,
-  '4 Minutes':  240000,
-  '5 Minutes':  300000,
-  '10 Minutes': 600000,
-  '15 Minutes': 900000,
-  '30 Minutes': 1800000,
-  '1 Hour':     3600000,
-  '2 Hours':    7200000,
-  '4 Hours':    14400000,
-  '6 Hours':    21600000,
-  '12 Hours':   43200000,
-  '24 Hours':   86400000,
+  'Off':              0,
+  'Repeat':           0,   // Special: no fixed interval — restarts after each completed run.
+  '1 Minute':         60000,
+  '2 Minutes':        120000,
+  '3 Minutes':        180000,
+  '4 Minutes':        240000,
+  '5 Minutes':        300000,
+  '10 Minutes':       600000,
+  'Every 15 Minutes': 900000,
+  'Every 30 Minutes': 1800000,
+  'Hourly':           3600000,
+  'Every 2 Hours':    7200000,
+  'Every 4 Hours':    14400000,
+  'Every 6 Hours':    21600000,
+  'Every 12 Hours':   43200000,
+  'Daily':            86400000,
 };
 
 /* Internal state — only one timer handle ever exists at a time. */
@@ -3362,6 +3377,7 @@ let _schedTimerId    = null;   // active setTimeout handle
 let _schedIntervalMs = 0;      // currently armed interval in ms
 let _schedFireAt     = 0;      // epoch ms when the timer will fire
 let _schedTickTimer  = null;   // 1-second ticker for the countdown label
+let _repeatTimeoutId = null;   // setTimeout handle for Repeat-mode restart (exactly one at a time)
 
 /* formatCountdown(ms) — converts remaining ms to human-readable string */
 function formatCountdown(ms) {
@@ -3396,8 +3412,26 @@ function clearSchedTimer() {
   updateSchedNextLabel();
 }
 
+/* clearRepeatTimeout() — cancels any pending Repeat-mode restart timeout.
+   Must be called before scheduling a new one to guarantee exactly one exists. */
+function clearRepeatTimeout() {
+  if (_repeatTimeoutId !== null) { clearTimeout(_repeatTimeoutId); _repeatTimeoutId = null; }
+}
+
+/* isRepeatMode() — returns true when all conditions required for Repeat are met. */
+function isRepeatMode() {
+  const n1 = allSettings && allSettings['n1'];
+  if (!n1) return false;
+  if (n1.fields && n1.fields.triggerType !== 'Schedule') return false;
+  if (n1.enabled === false) return false;
+  if (n1.status && n1.status !== 'Active') return false;
+  if (n1.fields && n1.fields.scanFrequency !== 'Repeat') return false;
+  return true;
+}
+
 /* getSchedIntervalMs() — reads the persisted interval from the Trigger
-   node's saved scanFrequency field.  Falls back to 0 (Off). */
+   node's saved scanFrequency field.  Falls back to 0 (Off).
+   Returns 0 for Repeat mode (handled separately by scheduleRepeatCycle). */
 function getSchedIntervalMs() {
   const n1 = allSettings && allSettings['n1'];
   if (!n1) return 0;
@@ -3406,7 +3440,37 @@ function getSchedIntervalMs() {
   if (n1.enabled === false) return 0;
   if (n1.status && n1.status !== 'Active') return 0;
   const freq = (n1.fields && n1.fields.scanFrequency) || 'Off';
+  if (freq === 'Repeat') return 0; // Repeat is not time-based — handled by scheduleRepeatCycle()
   return SCAN_FREQUENCY_MS[freq] || 0;
+}
+
+/* scheduleRepeatCycle() — schedules the next workflow run ~2 seconds after
+   the current one finishes.  Only fires when all Repeat conditions are met.
+   Uses exactly one _repeatTimeoutId reference — always clears before setting. */
+function scheduleRepeatCycle() {
+  clearRepeatTimeout(); // Rule #7: clear any existing reference first
+
+  if (!isRepeatMode()) return;          // Conditions #5 / #12
+  if (workflowRunning) return;          // Rule #6: never two simultaneous runs
+
+  // Check for unresolved Pending Review or Manual Action Needed (Rule #9).
+  const hasPendingReview = sampleApplications.some(a => a.status === 'Pending Review');
+  const hasManualAction  = sampleApplications.some(a => a.status === 'Manual Action Needed');
+  if (hasPendingReview || hasManualAction) {
+    console.log('Repeat paused: unresolved Pending Review or Manual Action Needed.');
+    return;
+  }
+
+  _repeatTimeoutId = setTimeout(async () => {
+    _repeatTimeoutId = null;
+    if (!isRepeatMode()) return;          // Re-check conditions before firing
+    if (workflowRunning) return;          // Re-check: no simultaneous runs
+    const hasPR = sampleApplications.some(a => a.status === 'Pending Review');
+    const hasMA = sampleApplications.some(a => a.status === 'Manual Action Needed');
+    if (hasPR || hasMA) { console.log('Repeat aborted: unresolved review/action.'); return; }
+    showToast('Workflow completed. Starting the next scan.', 'info');
+    await runWorkflow();
+  }, 2000); // ~2-second safe delay (Rule #4)
 }
 
 /* armScheduler(intervalMs) — arms ONE fresh timeout.
