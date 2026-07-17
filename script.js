@@ -629,6 +629,57 @@ function clearNotifications(){
   showToast('Notifications cleared.');
 }
 
+function isOpenableApplicationUrl(url){
+  const value = String(url || '').trim();
+  if(!value || !isValidUrl(value)) return false;
+  try{
+    const parsed = new URL(value);
+    const hostname = parsed.hostname.toLowerCase();
+    if(!['http:','https:'].includes(parsed.protocol)) return false;
+    if(hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === 'example.com' || hostname.endsWith('.example.com')) return false;
+    return true;
+  } catch(err){
+    return false;
+  }
+}
+
+function buildApplicationDetailsHtml(app){
+  const normalized = normalizeApplicationRecord(app);
+  const displayUrl = normalized.applicationUrl || normalized.applyUrl || '';
+  const urlLine = isOpenableApplicationUrl(displayUrl)
+    ? `<a href="${escapeHtml(displayUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(displayUrl)}</a>`
+    : 'Not available';
+  const coverLetterText = normalized.coverLetter || (normalized.coverLetterUsed ? 'Generated cover letter available.' : '');
+  const retryLine = Number(normalized.retryCount || 0) > 0 ? `<p><strong>Retry Count:</strong> ${escapeHtml(String(normalized.retryCount))}</p>` : '';
+  const reasonLine = normalized.manualActionReason || normalized.failureReason || 'No additional reason provided.';
+  return `
+    <div style="display:grid;gap:12px;">
+      <p><strong>Job Title:</strong> ${escapeHtml(normalized.jobTitle)}</p>
+      <p><strong>Company:</strong> ${escapeHtml(normalized.company)}</p>
+      <p><strong>Match Score:</strong> ${escapeHtml(String(normalized.matchScore))}%</p>
+      <p><strong>Source:</strong> ${escapeHtml(normalized.source)}</p>
+      <p><strong>Application Date & Time:</strong> ${escapeHtml(`${formatSampleDate(normalized.date)} • ${normalized.time}`)}</p>
+      <p><strong>Current Status:</strong> ${escapeHtml(normalized.status)}</p>
+      <p><strong>Resume Used:</strong> ${escapeHtml(normalized.resumeUsed ? 'Yes' : 'No')}</p>
+      ${coverLetterText ? `<p><strong>Cover Letter:</strong><br>${escapeHtml(coverLetterText)}</p>` : ''}
+      <p><strong>Manual Action Reason / Failure Reason:</strong> ${escapeHtml(reasonLine)}</p>
+      ${retryLine}
+      <p><strong>Job URL:</strong> ${urlLine}</p>
+    </div>
+  `;
+}
+
+function openApplicationForRecord(app){
+  const normalized = normalizeApplicationRecord(app);
+  const url = String(normalized.applicationUrl || normalized.applyUrl || '').trim();
+  if(isOpenableApplicationUrl(url)){
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+  showToast('Application link unavailable (Demo Mode).', 'info');
+  return false;
+}
+
 function openMobileMenu(){
   const menu = document.getElementById('mobileNavMenu');
   const backdrop = document.getElementById('mobileNavBackdrop');
@@ -1157,11 +1208,16 @@ function buildApplicationResult(job, attemptNumber = 0, profileStateOverride, ra
   return 'Permanent Failure';
 }
 
-function syncWorkflowUi(){
-  renderDashboard();
+function syncApplicationViews(){
   renderApplicationsTable();
+  renderDashboard();
   renderAnalytics();
   renderNotifications();
+  updateNotificationBadge();
+}
+
+function syncWorkflowUi(){
+  syncApplicationViews();
 }
 
 async function highlightNode(id, status='completed', duration=750){
@@ -1237,9 +1293,7 @@ function persistApplication(job, status, extra = {}){
   if(!existing){ sampleApplications.unshift(normalized); }
   else { const index = sampleApplications.indexOf(existing); if(index > -1){ sampleApplications.splice(index,1); sampleApplications.unshift(normalized); } }
   saveAppState();
-  renderApplicationsTable();
-  renderDashboard();
-  renderAnalytics();
+  syncApplicationViews();
   return normalized;
 }
 
@@ -1316,7 +1370,7 @@ async function processRemainingWorkflowQueue(afterJobId){
       workflowState.currentJobId = job.id;
       workflowPauseContext = {jobId: job.id, appId: application.id};
       addActivity(`Workflow paused for ${job.jobTitle || job.title} at ${job.company}.`);
-      addNotification('Pending Review', `${job.jobTitle || job.title} at ${job.company} is waiting for approval.`);
+      addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
       await executeWorkflowNode(job, 'pending', 'pending_review', 'pending');
       workflowRunning = false;
       setWorkflowState('paused', {pauseReason:'manual_review'});
@@ -1385,7 +1439,7 @@ async function processRemainingWorkflowQueue(afterJobId){
         const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'The application could not be submitted automatically.', manualActionReason: pickManualActionReason(job)});
         workflowPauseContext = {jobId: job.id, appId: manualApp.id};
         addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Pending Review', `${job.jobTitle || job.title} at ${job.company} needs user action.`);
+        addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
         await executeWorkflowNode(job, 'pending', 'manual_action_needed', 'pending');
         workflowRunning = false;
         setWorkflowState('paused', {pauseReason:'manual_review'});
@@ -1401,7 +1455,7 @@ async function processRemainingWorkflowQueue(afterJobId){
         job.workflowFinalStatus = 'permanent_failure';
         persistApplication(job, 'Permanent Failure', {failureReason:'Permanent failure during submission.', notes:'The application could not be submitted due to a permanent issue.'});
         addActivity(`Application permanently failed for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted.`);
+        addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted. No further retries will be attempted.`);
         await executeWorkflowNode(job, 'n16', 'completed', 'completed');
         await executeWorkflowNode(job, 'n17', 'completed', 'completed');
         applicationsCount += 1;
@@ -1468,12 +1522,8 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
     persistApplication(job, 'Skipped', {skipReason:'Rejected by user', failureReason:'Rejected manually and skipped.', notes:'Rejected manually and skipped.', manualReviewRequired:false});
     if(queueEntry) queueEntry.status = 'completed';
     workflowPauseContext = null;
-    renderApplicationsTable();
-    renderDashboard();
-    renderAnalytics();
+    syncApplicationViews();
     addActivity(`Application rejected for ${job.jobTitle} at ${job.company}.`);
-    addNotification('Application Rejected', `${job.jobTitle} at ${job.company} was rejected and skipped.`);
-    renderNotifications();
     showToast('Application rejected and skipped.', 'info');
     await processRemainingWorkflowQueue(job.id);
     workflowRunning = false;
@@ -1526,7 +1576,7 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
       workflowState.pauseReason = 'manual_review';
       setWorkflowState('paused', {pauseReason:'manual_review'});
       addActivity(`Manual action required for ${job.jobTitle} at ${job.company}.`);
-      addNotification('Manual Action Needed', `${job.jobTitle} at ${job.company} requires manual action.`);
+      addNotification('Manual Action Needed', `${job.jobTitle} at ${job.company} requires manual completion before submission.`);
       await executeWorkflowNode(job, 'n16', 'completed', 'completed');
       await executeWorkflowNode(job, 'n17', 'completed', 'completed');
       renderApplicationsTable();
@@ -1545,7 +1595,7 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
       await executeWorkflowNode(job, 'n17', 'permanent_failure', 'completed');
       persistApplication(job, 'Permanent Failure', {failureReason:'Permanent failure during submission.', notes:'The application could not be submitted automatically.'});
       addActivity(`Application permanently failed for ${job.jobTitle} at ${job.company}.`);
-      addNotification('Permanent Failure', `${job.jobTitle} at ${job.company} could not be submitted.`);
+      addNotification('Permanent Failure', `${job.jobTitle} at ${job.company} could not be submitted. No further retries will be attempted.`);
       break;
     default:
       throw new Error('Unknown submission result');
@@ -1612,14 +1662,14 @@ async function retryApplication(appId){
     case 'manual_action_needed':
       persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, retryCount:nextRetryCount, failureReason:'Manual action required.', notes:'Retry requires manual action.', manualActionReason: pickManualActionReason(job)});
       addActivity(`Retry requires manual action for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-      addNotification('Pending Review', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} needs manual action after retry.`);
+      addNotification('Manual Action Needed', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} requires manual completion before submission.`);
       showToast('Retry requires manual action.', 'warning');
       break;
     case 'Permanent Failure':
     case 'permanent_failure':
       persistApplication(job, 'Permanent Failure', {retryCount:nextRetryCount, failureReason:'Permanent failure during retry.', notes:'Retry failed permanently.'});
       addActivity(`Retry permanently failed for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-      addNotification('Permanent Failure', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} could not be submitted after retry.`);
+      addNotification('Permanent Failure', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} could not be submitted. No further retries will be attempted.`);
       showToast('Retry failed permanently.', 'error');
       break;
     case 'Temporary Failure':
@@ -1834,7 +1884,7 @@ async function runWorkflow(){
       workflowState.currentJobId = job.id;
       workflowPauseContext = {jobId: job.id, appId: application.id};
       addActivity(`Workflow paused for ${job.jobTitle || job.title} at ${job.company}.`);
-      addNotification('Pending Review', `${job.jobTitle || job.title} at ${job.company} is waiting for approval.`);
+      addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
       await executeWorkflowNode(job, 'pending', 'pending_review', 'pending');
       workflowRunning = false;
       setWorkflowState('paused', {pauseReason:'manual_review'});
@@ -1901,7 +1951,7 @@ async function runWorkflow(){
         const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'The application could not be submitted automatically.', manualActionReason: pickManualActionReason(job)});
         workflowPauseContext = {jobId: job.id, appId: manualApp.id};
         addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Pending Review', `${job.jobTitle || job.title} at ${job.company} needs user action.`);
+        addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
         await executeWorkflowNode(job, 'pending', 'manual_action_needed', 'pending');
         workflowRunning = false;
         setWorkflowState('paused', {pauseReason:'manual_review'});
@@ -1915,7 +1965,7 @@ async function runWorkflow(){
         job.workflowFinalStatus = 'permanent_failure';
         persistApplication(job, 'Permanent Failure', {failureReason:'Permanent failure during submission.', notes:'The application could not be submitted due to a permanent issue.'});
         addActivity(`Application permanently failed for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted.`);
+        addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted. No further retries will be attempted.`);
         await executeWorkflowNode(job, 'n16', 'completed', 'completed');
         await executeWorkflowNode(job, 'n17', 'completed', 'completed');
         applicationsCount += 1;
@@ -3026,30 +3076,15 @@ if(appsSortOrderEl) appsSortOrderEl.addEventListener('change', renderApplication
 if(appsLoadMoreBtnEl) appsLoadMoreBtnEl.addEventListener('click', loadMoreApplications);
 
 function handleViewManualDetails(appId){
-  const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===appId));
+  const app = sampleApplications.find(a=>a.id===appId);
   if(!app) return;
-  const reason = app.manualActionReason || 'Reason not specified.';
-  const urlLine = (app.applicationUrl && isValidUrl(app.applicationUrl) && !isExampleDomain(app.applicationUrl))
-    ? `<a href="${escapeHtml(app.applicationUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(app.applicationUrl)}</a>`
-    : 'Not available';
-  openModal(`${app.jobTitle} at ${app.company}`, `
-    <p><strong>Status:</strong> Manual Action Needed</p>
-    <p><strong>Reason manual action is required:</strong> ${escapeHtml(reason)}</p>
-    <p><strong>Application URL:</strong> ${urlLine}</p>
-    <p><strong>Match Score:</strong> ${app.matchScore}%</p>
-    <p><strong>Source:</strong> ${escapeHtml(app.source)}</p>
-  `);
+  openModal(`${app.jobTitle || 'View Details'} at ${app.company || 'Unknown Company'}`, buildApplicationDetailsHtml(app));
 }
 
 function handleOpenManualApplication(appId){
   const app = sampleApplications.find(a=>a.id===appId);
   if(!app) return;
-  const url = String(app.applicationUrl || app.applyUrl || '').trim();
-  if(!url || !isValidUrl(url) || isExampleDomain(url)){
-    showToast('Application URL unavailable.', 'error');
-    return;
-  }
-  window.open(url, '_blank', 'noopener,noreferrer');
+  openApplicationForRecord(app);
 }
 
 async function handleMarkManualCompleted(appId){
@@ -3074,6 +3109,8 @@ async function handleMarkManualCompleted(appId){
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if(runBtn){ runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
 
+  job.workflowStatus = 'Success';
+  job.workflowFinalStatus = 'success';
   persistApplication(job, 'Success', {
     manualReviewRequired: false,
     confirmationMessage: 'Manual application completed successfully.',
@@ -3085,7 +3122,7 @@ async function handleMarkManualCompleted(appId){
   });
 
   addActivity(`Manual application completed for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-  addNotification('Manual Action Completed', 'Manual application completed successfully.');
+  addNotification('Application Submitted', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} was submitted successfully.`);
   renderApplicationsTable();
   renderDashboard();
   renderAnalytics();
@@ -3128,6 +3165,8 @@ async function handleMarkManualFailed(appId){
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if(runBtn){ runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
 
+  job.workflowStatus = 'Permanent Failure';
+  job.workflowFinalStatus = 'permanent_failure';
   persistApplication(job, 'Permanent Failure', {
     manualReviewRequired: false,
     failureReason,
@@ -3137,7 +3176,7 @@ async function handleMarkManualFailed(appId){
   });
 
   addActivity(`Manual application failed for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-  addNotification('Manual Action Failed', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} could not be completed manually.`);
+  addNotification('Permanent Failure', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} could not be submitted. No further retries will be attempted.`);
   renderApplicationsTable();
   renderDashboard();
   renderAnalytics();
@@ -3172,7 +3211,6 @@ if(appsTableBodyEl){
         renderDashboard();
         renderAnalytics();
         addActivity(`Application approved for ${app.jobTitle} at ${app.company}.`);
-        addNotification('Application Approved', `${app.jobTitle} at ${app.company} is now being processed.`);
         renderNotifications();
         const result = await resumeApprovalWorkflow(app, 'approve');
         if(result === 'success'){
@@ -3203,7 +3241,6 @@ if(appsTableBodyEl){
           renderDashboard();
           renderAnalytics();
           addActivity(`Application rejected for ${app.jobTitle} at ${app.company}.`);
-          addNotification('Application Rejected', `${app.jobTitle} at ${app.company} was rejected and skipped.`);
           renderNotifications();
           showToast('Application rejected and skipped.', 'info');
           workflowPauseContext = null;
@@ -3215,7 +3252,6 @@ if(appsTableBodyEl){
           renderDashboard();
           renderAnalytics();
           addActivity(`Application rejected for ${app.jobTitle} at ${app.company}.`);
-          addNotification('Application Rejected', `${app.jobTitle} at ${app.company} was rejected and skipped.`);
           renderNotifications();
           showToast('Application rejected and skipped.', 'info');
         }
