@@ -1976,6 +1976,9 @@ async function runWorkflow() {
 }
 
 function resetDemoData() {
+  // Cancel any pending scheduler or repeat timers before clearing state.
+  clearSchedTimer();
+  clearRepeatTimeout();
   jobsData = [];
   sampleApplications = [];
   appState.jobs = [];
@@ -1985,20 +1988,25 @@ function resetDemoData() {
   workflowState = createDefaultWorkflowState();
   workflowPauseContext = null;
   scanWaiting = false;
+  workflowRunning = false;
   saveAppState();
   clearWorkflowNodeStyles();
   renderApplicationsTable();
   renderDashboard();
   renderAnalytics();
   renderNotifications();
+  updateNotificationBadge();
   showToast('Demo data cleared. Profile preserved.');
 }
 
 function loadMoreApplications() {
   const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
+  // Use dynamic dates relative to today so no hardcoded date strings remain.
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const yesterdayISO = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   const extra = [
-    { id: nextId, jobTitle: 'Full Stack Developer', company: 'Violet Works', location: 'Austin, TX', source: 'Glassdoor', matchScore: 78, date: '2026-07-06', status: 'Temporary Failure' },
-    { id: nextId + 1, jobTitle: 'Product Designer', company: 'Crescent Labs', location: 'Remote', source: 'LinkedIn', matchScore: 82, date: '2026-07-05', status: 'Pending Review' },
+    { id: nextId,     jobTitle: 'Full Stack Developer', company: 'Violet Works',  location: 'Austin, TX', source: 'Glassdoor', matchScore: 78, date: todayISO,     status: 'Temporary Failure' },
+    { id: nextId + 1, jobTitle: 'Product Designer',     company: 'Crescent Labs', location: 'Remote',     source: 'LinkedIn',  matchScore: 82, date: yesterdayISO, status: 'Pending Review' },
   ].map(item => normalizeApplicationRecord(item));
   sampleApplications.push(...extra);
   appState.settings.nextApplicationId = nextId + extra.length;
@@ -3041,7 +3049,7 @@ function renderApplicationsTable() {
       <td data-label="Date">${escapeHtml(`${formatSampleDate(a.date)} • ${a.time}`)}</td>
       <td data-label="Status"><span class="status-badge ${meta.cls}">${meta.icon} ${escapeHtml(a.status)}</span></td>
       <td data-label="Action">
-        ${a.status === 'Manual Action Needed' || a.status === 'Temporary Failure' ? '' : `<button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button>`}
+        ${a.status === 'Manual Action Needed' || a.status === 'Temporary Failure' ? '' : `<button type="button" class="apps-action-btn" data-action="view-application" data-app-id="${a.id}">View</button>`}
         ${reviewButtons}
       </td>
     </tr>`;
@@ -3059,7 +3067,22 @@ function renderApplicationsTable() {
 
 /* AUDIT FIX #5 — Analytics is derived from the same computeDashboardStats()
    output as the Dashboard, plus match-score/day/role breakdowns computed
-   live from sampleApplications. Nothing here is hardcoded. */
+   live from sampleApplications. Nothing here is hardcoded.
+   All five chart divs are populated with bar-chart HTML using the same
+   pattern as the Dashboard status/source bars. */
+function buildSimpleBarsHtml(entries, totalCount) {
+  /* entries: [{label, count}]. Renders a mini bar row for each. */
+  if (!entries.length) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0</div></div>';
+  return entries.map(({ label, count, cls }) => {
+    const pct = totalCount ? Math.round((count / totalCount) * 100) : 0;
+    return `<div class="bar-row">
+      <div class="bar-label">${escapeHtml(String(label))}</div>
+      <div class="bar-track"><div class="bar-fill ${cls || 'bar-fill-neutral'}" style="width:${pct}%"></div></div>
+      <div class="bar-value">${count} (${pct}%)</div>
+    </div>`;
+  }).join('');
+}
+
 function renderAnalytics() {
   const grid = document.getElementById('analyticsStatsGrid');
   if (!grid) return;
@@ -3092,11 +3115,78 @@ function renderAnalytics() {
 
   const summaryEl = document.getElementById('analyticsSummaryText');
   if (summaryEl) {
-    if (total === 0) {
-      summaryEl.textContent = 'Analytics will appear after application activity is recorded.';
-    } else {
-      summaryEl.textContent = `In the current dataset, ${total} applications were sent with a ${successRate}% success rate and an average match score of ${avgMatch}%. ${thisWeek} application${thisWeek === 1 ? '' : 's'} went out in the last 7 days.`;
-    }
+    summaryEl.textContent = total === 0
+      ? 'Analytics will appear after application activity is recorded.'
+      : `In the current dataset, ${total} applications were sent with a ${successRate}% success rate and an average match score of ${avgMatch}%. ${thisWeek} application${thisWeek === 1 ? '' : 's'} went out in the last 7 days.`;
+  }
+
+  // ---- Status Distribution chart ----
+  const statusChartEl = document.getElementById('analyticsStatusChart');
+  if (statusChartEl) {
+    const statusEntries = STATUS_ORDER.map(s => ({
+      label: s,
+      count: applications.filter(a => a.status === s).length,
+      cls: (STATUS_META[s] || {}).cls || 'bar-fill-neutral'
+    })).filter(e => e.count > 0);
+    statusChartEl.innerHTML = buildSimpleBarsHtml(statusEntries, total);
+  }
+
+  // ---- Match Score Distribution chart (buckets) ----
+  const matchChartEl = document.getElementById('analyticsMatchChart');
+  if (matchChartEl) {
+    const buckets = [
+      { label: '0–49%',   min: 0,  max: 49  },
+      { label: '50–64%',  min: 50, max: 64  },
+      { label: '65–74%',  min: 65, max: 74  },
+      { label: '75–84%',  min: 75, max: 84  },
+      { label: '85–100%', min: 85, max: 100 },
+    ];
+    const matchEntries = buckets.map(b => ({
+      label: b.label,
+      count: applications.filter(a => a.matchScore >= b.min && a.matchScore <= b.max).length,
+      cls: 'bar-fill-neutral'
+    })).filter(e => e.count > 0);
+    matchChartEl.innerHTML = buildSimpleBarsHtml(matchEntries, total);
+  }
+
+  // ---- Applications by Source chart ----
+  const sourceChartEl = document.getElementById('analyticsSourceChart');
+  if (sourceChartEl) {
+    const sources = [...new Set(applications.map(a => a.source).filter(Boolean))];
+    const sourceEntries = sources.map(s => ({
+      label: s,
+      count: applications.filter(a => a.source === s).length,
+      cls: 'bar-fill-neutral'
+    }));
+    sourceChartEl.innerHTML = buildSimpleBarsHtml(sourceEntries, total);
+  }
+
+  // ---- Applications by Role chart ----
+  const roleChartEl = document.getElementById('analyticsRoleChart');
+  if (roleChartEl) {
+    const roleMap = new Map();
+    applications.forEach(a => {
+      const role = String(a.jobTitle || 'Other').split(' ').slice(-1)[0]; // last word as category
+      roleMap.set(role, (roleMap.get(role) || 0) + 1);
+    });
+    const roleEntries = [...roleMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([label, count]) => ({ label, count, cls: 'bar-fill-neutral' }));
+    roleChartEl.innerHTML = buildSimpleBarsHtml(roleEntries, total);
+  }
+
+  // ---- Applications by Day of week chart ----
+  const dayChartEl = document.getElementById('analyticsDayChart');
+  if (dayChartEl) {
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dayCounts = [0, 0, 0, 0, 0, 0, 0];
+    applications.forEach(a => {
+      const d = new Date(a.date + 'T00:00:00');
+      if (!isNaN(d)) dayCounts[d.getDay()]++;
+    });
+    const dayEntries = dayNames.map((label, i) => ({ label, count: dayCounts[i], cls: 'bar-fill-neutral' })).filter(e => e.count > 0);
+    dayChartEl.innerHTML = buildSimpleBarsHtml(dayEntries, total);
   }
 }
 
@@ -3296,7 +3386,17 @@ if (appsTableBodyEl) {
       await retryApplication(Number(retryBtn.dataset.appId));
       return;
     }
-    const btn = e.target.closest('.apps-action-btn');
+    // Explicit handler for the View button (data-action="view-application") — must come first.
+    const viewBtn = e.target.closest('[data-action="view-application"]');
+    if (viewBtn) {
+      const id = Number(viewBtn.dataset.appId);
+      const app = sampleApplications.find(a => a.id === id);
+      if (!app) return;
+      openModal(`${app.jobTitle} at ${app.company}`, buildApplicationDetailsHtml(normalizeApplicationRecord(app)));
+      return;
+    }
+    // Generic fallback: only buttons with no data-action reach here (safety net).
+    const btn = e.target.closest('.apps-action-btn:not([data-action])');
     if (!btn) return;
     const id = Number(btn.dataset.appId);
     const app = normalizeApplicationRecord(sampleApplications.find(a => a.id === id));
