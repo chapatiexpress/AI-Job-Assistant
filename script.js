@@ -690,8 +690,10 @@ const jobProviderService = {
           const source = sources[Math.floor(Math.random()*sources.length)];
           const salary = salaryRanges[Math.floor(Math.random()*salaryRanges.length)];
           const requiresManualAction = Math.random() < 0.12 || (source.toLowerCase().includes('monster') && Math.random() < 0.35);
+          const jobId = `provider-job-${Date.now()}-${i}`;
+          const applicationUrl = `http://localhost/apply/${encodeURIComponent(jobId)}`;
           jobs.push({
-            id:`provider-job-${Date.now()}-${i}`,
+            id: jobId,
             company,
             title: `${role} ${['II','III','Lead','Senior','Junior',''].filter(Boolean)[Math.floor(Math.random()*6)]}`.trim(),
             jobTitle: `${role} ${['II','III','Lead','Senior','Junior',''].filter(Boolean)[Math.floor(Math.random()*6)]}`.trim(),
@@ -700,8 +702,8 @@ const jobProviderService = {
             jobType: 'Full-time',
             remote,
             description: `Opportunity for a ${role.toLowerCase()} role focused on impact, collaboration, and shipping high quality work.`,
-            applicationUrl: '',
-            applyUrl: '',
+            applicationUrl,
+            applyUrl: applicationUrl,
             source,
             postedDate: new Date().toISOString().slice(0,10),
             automationPossible: Boolean(profile.resumeUploaded),
@@ -751,6 +753,12 @@ function createJobProviderContext(){
     settings: getNodeSettings('n3'),
     existingJobs: jobsData || []
   };
+}
+
+function generateApplicationUrl(job){
+  const rawId = String((job && (job.id || job.jobId || job.jobTitle || job.title)) || Date.now()).trim();
+  const safeId = encodeURIComponent(rawId.replace(/\s+/g,'-').replace(/[^a-zA-Z0-9-_]/g,''));
+  return `http://localhost/apply/${safeId}`;
 }
 
 function isValidUrl(url){
@@ -1102,14 +1110,16 @@ async function highlightNode(id, status='completed', duration=750){
 
 function createApplicationRecord(job, status, extra = {}){
   const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
+  const applicationUrl = String(extra.applicationUrl || extra.applyUrl || job.applicationUrl || job.applyUrl || generateApplicationUrl(job)).trim();
+  const applyUrl = String(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || applicationUrl).trim();
   const application = normalizeApplicationRecord({
     id: nextId,
     jobTitle: job.jobTitle || job.title,
     company: job.company,
     location: job.location,
     source: job.source,
-    applicationUrl: job.applicationUrl || job.applyUrl || '',
-    applyUrl: job.applyUrl || job.applicationUrl || '',
+    applicationUrl,
+    applyUrl,
     matchScore: Number(job.matchScore) || 0,
     date: new Date().toISOString().slice(0,10),
     status,
@@ -1126,6 +1136,8 @@ function createApplicationRecord(job, status, extra = {}){
 function persistApplication(job, status, extra = {}){
   const existing = sampleApplications.find(app => app.jobId === job.id || (app.jobTitle === (job.jobTitle || job.title) && app.company === job.company && app.location === job.location && app.source === job.source));
   const application = existing || createApplicationRecord(job, status, extra);
+  const applicationUrl = String(extra.applicationUrl || extra.applyUrl || job.applicationUrl || job.applyUrl || application.applicationUrl || generateApplicationUrl(job)).trim();
+  const applyUrl = String(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || application.applyUrl || applicationUrl).trim();
   const normalized = normalizeApplicationRecord({
     ...application,
     jobId: job.id,
@@ -1133,8 +1145,8 @@ function persistApplication(job, status, extra = {}){
     company: job.company,
     location: job.location,
     source: job.source,
-    applicationUrl: job.applicationUrl || application.applicationUrl || job.applyUrl || application.applyUrl || '',
-    applyUrl: job.applyUrl || application.applyUrl || job.applicationUrl || application.applicationUrl || '',
+    applicationUrl,
+    applyUrl,
     matchScore: Number(job.matchScore) || application.matchScore || 0,
     date: application.date || new Date().toISOString().slice(0,10),
     status,
@@ -1413,6 +1425,8 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
   switch(submissionResult){
     case 'Success':
     case 'success':
+      job.workflowStatus = 'Success';
+      job.workflowFinalStatus = 'success';
       await executeWorkflowNode(job, 'n16', 'success', 'completed');
       await executeWorkflowNode(job, 'n17', 'success', 'completed');
       persistApplication(job, 'Success', {confirmationMessage:'Application submitted successfully.', submittedAt:new Date().toISOString(), notes:'Application submitted successfully.', retryCount:(app.retryCount || 0)});
@@ -1421,6 +1435,8 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
       break;
     case 'Temporary Failure':
     case 'temporary_failure':
+      job.workflowStatus = 'Temporary Failure';
+      job.workflowFinalStatus = 'temporary_failure';
       await executeWorkflowNode(job, 'n16', 'temporary_failure', 'completed');
       await executeWorkflowNode(job, 'n17', 'temporary_failure', 'completed');
       persistApplication(job, 'Temporary Failure', {failureReason:'Temporary failure during submission.', retryCount:(app.retryCount || 0) + 1, nextRetryAt:new Date().toISOString(), notes:'Temporary failure during submission; retry scheduled.'});
@@ -1451,6 +1467,8 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
       return 'manual_action_needed';
     case 'Permanent Failure':
     case 'permanent_failure':
+      job.workflowStatus = 'Permanent Failure';
+      job.workflowFinalStatus = 'permanent_failure';
       await executeWorkflowNode(job, 'n16', 'permanent_failure', 'completed');
       await executeWorkflowNode(job, 'n17', 'permanent_failure', 'completed');
       persistApplication(job, 'Permanent Failure', {failureReason:'Permanent failure during submission.', notes:'The application could not be submitted automatically.'});
@@ -2760,8 +2778,8 @@ function renderApplicationsTable(){
 
   tbody.innerHTML = filtered.map(a=>{
     const meta = STATUS_META[a.status] || {cls:'',icon:''};
-    const reviewButtons = a.status === 'Pending Review' ? `
-      <button type="button" class="apps-action-btn" data-action="approve-application" data-app-id="${a.id}">Approve</button>
+    const reviewButtons = ['Pending Review','Manual Action Needed'].includes(a.status) ? `
+      <button type="button" class="apps-action-btn" data-action="approve-application" data-app-id="${a.id}">${a.status === 'Manual Action Needed' ? 'Retry' : 'Approve'}</button>
       <button type="button" class="apps-action-btn" data-action="reject-application" data-app-id="${a.id}">Reject</button>
     ` : '';
     return `<tr>
@@ -2849,9 +2867,10 @@ if(appsTableBodyEl){
     if(approveBtn){
       const id = Number(approveBtn.dataset.appId);
       const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===id));
-      if(app && app.status === 'Pending Review'){
-        app.notes = 'Approved for submission.';
-        saveAppState();
+      const job = getWorkflowJobForApp(app);
+      if(app && ['Pending Review','Manual Action Needed'].includes(app.status)){
+        const subject = job || {...app, id: app.jobId || app.id};
+        persistApplication(subject, app.status, {notes:'Approved for submission.', manualReviewRequired:false});
         renderApplicationsTable();
         renderDashboard();
         renderAnalytics();
@@ -2875,7 +2894,7 @@ if(appsTableBodyEl){
     if(rejectBtn){
       const id = Number(rejectBtn.dataset.appId);
       const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===id));
-      if(app && app.status === 'Pending Review'){
+      if(app && ['Pending Review','Manual Action Needed'].includes(app.status)){
         const job = getWorkflowJobForApp(app);
         if(job){
           persistApplication(job, 'Skipped', {skipReason:'Rejected by user', failureReason:'Rejected manually and skipped.', notes:'Rejected manually and skipped.', manualReviewRequired:false});
