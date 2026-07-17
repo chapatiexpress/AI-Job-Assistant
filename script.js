@@ -411,8 +411,17 @@ const DEFAULT_APP_STATE = {
   settings:{nextJobId:101,nextApplicationId:1,pageSize:8,demoMode:false}
 };
 
+/* ---------------------------------------------------------------------
+   FIX (audit #1 — undefined values): fallbackText() is the single choke
+   point every job/application title, company, source, etc. passes
+   through before being stored or rendered. Stripping stray "undefined"/
+   "null" fragments here is a safety net that guarantees no bad string
+   concatenation anywhere in the app can ever leak "undefined" into the
+   UI, even if a future code path reintroduces a similar bug.
+   --------------------------------------------------------------------- */
 function fallbackText(value, fallback){
-  const normalized = String(value ?? '').trim();
+  let normalized = String(value ?? '').trim();
+  normalized = normalized.replace(/\b(undefined|null)\b/gi, '').replace(/\s{2,}/g, ' ').trim();
   return normalized ? normalized : fallback;
 }
 
@@ -696,6 +705,13 @@ const jobProviderService = {
         const sources = ['LinkedIn','Indeed','Glassdoor','Monster','CareerBuilder'];
         const remoteOptions = ['Remote','Hybrid','On-site'];
         const salaryRanges = ['$70k-$90k','$80k-$105k','$90k-$120k','$100k-$130k','$110k-$150k'];
+        /* FIX (audit #1): title suffixes are kept as one fixed-length array and the
+           suffix is resolved ONCE per job, then reused for both `title` and
+           `jobTitle`. The previous version called `.filter(Boolean)` (which shrinks
+           the array from 6 items to 5) but still indexed with `Math.random()*6`,
+           so index 5 was out of bounds and produced `undefined`, which template
+           interpolation stringified into literal text: "React Developer undefined". */
+        const titleSuffixes = ['II','III','Lead','Senior','Junior',''];
         const count = 8 + Math.floor(Math.random()*5);
         const jobs = [];
         for(let i=0;i<count;i++){
@@ -708,11 +724,13 @@ const jobProviderService = {
           const requiresManualAction = Math.random() < 0.12 || (source.toLowerCase().includes('monster') && Math.random() < 0.35);
           const jobId = `provider-job-${Date.now()}-${i}`;
           const applicationUrl = `http://localhost/apply/${encodeURIComponent(jobId)}`;
+          const suffix = titleSuffixes[Math.floor(Math.random()*titleSuffixes.length)];
+          const roleTitle = suffix ? `${role} ${suffix}` : role;
           jobs.push({
             id: jobId,
             company,
-            title: `${role} ${['II','III','Lead','Senior','Junior',''].filter(Boolean)[Math.floor(Math.random()*6)]}`.trim(),
-            jobTitle: `${role} ${['II','III','Lead','Senior','Junior',''].filter(Boolean)[Math.floor(Math.random()*6)]}`.trim(),
+            title: roleTitle,
+            jobTitle: roleTitle,
             location,
             salary,
             jobType: 'Full-time',
@@ -738,10 +756,10 @@ const jobProviderService = {
 };
 
 function normalizeJobFromProvider(job, context = {}){
-  const title = String(job.title || job.jobTitle || 'Software Role').trim();
-  const company = String(job.company || 'Unknown Company').trim();
-  const location = String(job.location || 'Remote').trim();
-  const remote = String(job.remote || job.locationType || 'Remote').trim();
+  const title = fallbackText(job.title || job.jobTitle, 'Software Role');
+  const company = fallbackText(job.company, 'Unknown Company');
+  const location = fallbackText(job.location, 'Remote');
+  const remote = fallbackText(job.remote || job.locationType, 'Remote');
   return {
     id: job.id || `job-${context.index || 0}`,
     company,
@@ -1547,6 +1565,85 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
   workflowRunning = false;
   if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
   return submissionResult ? String(submissionResult).toLowerCase().replace(/ /g,'_') : 'completed';
+}
+
+/* ---------------------------------------------------------------------
+   FIX (audit #3 — Temporary Failure retry): previously there was no way
+   to retry a Temporary Failure application at all. retryApplication()
+   reuses the SAME application record (matched by jobId inside
+   persistApplication, so it can never create a duplicate row),
+   increments retryCount, reruns buildApplicationResult(), and can land
+   on Success, Permanent Failure, Manual Action Needed, or remain a
+   Temporary Failure (in which case it can be retried again). Every
+   surface (Applications/Dashboard/Analytics/Activity/Notifications) is
+   refreshed and localStorage is persisted via persistApplication/
+   addActivity/addNotification, exactly like every other status change.
+   --------------------------------------------------------------------- */
+async function retryApplication(appId){
+  if(workflowRunning){ showToast('Workflow is currently running. Please wait.', 'warning'); return; }
+  const app = sampleApplications.find(a=>a.id===appId);
+  if(!app || app.status !== 'Temporary Failure') return;
+
+  const job = getWorkflowJobForApp(app) || {
+    id: app.jobId, jobTitle: app.jobTitle, company: app.company,
+    location: app.location, source: app.source,
+    applicationUrl: app.applicationUrl, applyUrl: app.applyUrl, matchScore: app.matchScore
+  };
+
+  workflowRunning = true;
+  setWorkflowState('running');
+  const runBtn = document.querySelector('[data-action="run-workflow"]');
+  if(runBtn){ runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
+
+  const nextRetryCount = (app.retryCount || 0) + 1;
+  await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
+  const outcome = buildApplicationResult(job, nextRetryCount, profileState);
+  applySubmissionResultVisuals(String(outcome).toLowerCase().replace(/ /g,'_'));
+
+  switch(outcome){
+    case 'Success':
+    case 'success':
+      persistApplication(job, 'Success', {confirmationMessage:'Application submitted successfully on retry.', submittedAt:new Date().toISOString(), retryCount:nextRetryCount, notes:'Retried and succeeded.', failureReason:''});
+      addActivity(`Retry succeeded for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
+      addNotification('Application Submitted', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} was submitted successfully on retry.`);
+      showToast('Retry succeeded.', 'success');
+      break;
+    case 'Manual Action Needed':
+    case 'manual_action_needed':
+      persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, retryCount:nextRetryCount, failureReason:'Manual action required.', notes:'Retry requires manual action.', manualActionReason: pickManualActionReason(job)});
+      addActivity(`Retry requires manual action for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
+      addNotification('Pending Review', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} needs manual action after retry.`);
+      showToast('Retry requires manual action.', 'warning');
+      break;
+    case 'Permanent Failure':
+    case 'permanent_failure':
+      persistApplication(job, 'Permanent Failure', {retryCount:nextRetryCount, failureReason:'Permanent failure during retry.', notes:'Retry failed permanently.'});
+      addActivity(`Retry permanently failed for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
+      addNotification('Permanent Failure', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} could not be submitted after retry.`);
+      showToast('Retry failed permanently.', 'error');
+      break;
+    case 'Temporary Failure':
+    case 'temporary_failure':
+    default:
+      persistApplication(job, 'Temporary Failure', {retryCount:nextRetryCount, failureReason:'Temporary failure persisted on retry.', nextRetryAt:new Date().toISOString(), notes:'Temporary failure persisted; another retry is available.'});
+      addActivity(`Retry still temporarily failing for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
+      addNotification('Temporary Failure', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} still needs another attempt.`);
+      showToast('Still a temporary failure. You can retry again.', 'warning');
+      break;
+  }
+
+  await executeWorkflowNode(job, 'n16', 'completed', 'completed');
+  await executeWorkflowNode(job, 'n17', 'completed', 'completed');
+  await executeWorkflowNode(job, 'n18', 'completed', 'completed'); // Process Next Job
+
+  renderApplicationsTable();
+  renderDashboard();
+  renderAnalytics();
+  renderNotifications();
+
+  workflowRunning = false;
+  setWorkflowState('completed');
+  if(runBtn){ runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
 }
 
 async function runWorkflow(){
@@ -2845,6 +2942,11 @@ function renderApplicationsTable(){
         <button type="button" class="apps-action-btn" data-action="mark-manual-completed" data-app-id="${a.id}">Mark Completed</button>
         <button type="button" class="apps-action-btn" data-action="mark-manual-failed" data-app-id="${a.id}">Mark Failed</button>
       `;
+    } else if(a.status === 'Temporary Failure'){
+      /* FIX (audit #3): Retry action for Temporary Failure — was completely
+         missing before. Reuses the same record via persistApplication's
+         jobId match, so this can never create a duplicate row. */
+      reviewButtons = `<button type="button" class="apps-action-btn" data-action="retry-application" data-app-id="${a.id}">Retry</button>`;
     }
     return `<tr>
       <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
@@ -2853,7 +2955,7 @@ function renderApplicationsTable(){
       <td data-label="Date">${escapeHtml(`${formatSampleDate(a.date)} • ${a.time}`)}</td>
       <td data-label="Status"><span class="status-badge ${meta.cls}">${meta.icon} ${escapeHtml(a.status)}</span></td>
       <td data-label="Action">
-        ${a.status === 'Manual Action Needed' ? '' : `<button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button>`}
+        ${a.status === 'Manual Action Needed' || a.status === 'Temporary Failure' ? '' : `<button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button>`}
         ${reviewButtons}
       </td>
     </tr>`;
@@ -3140,11 +3242,23 @@ if(appsTableBodyEl){
       await handleMarkManualFailed(Number(markFailedBtn.dataset.appId));
       return;
     }
+    const retryBtn = e.target.closest('[data-action="retry-application"]');
+    if(retryBtn){
+      /* FIX (audit #3): wire the new Retry button to retryApplication() */
+      await retryApplication(Number(retryBtn.dataset.appId));
+      return;
+    }
     const btn = e.target.closest('.apps-action-btn');
     if(!btn) return;
     const id = Number(btn.dataset.appId);
     const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===id));
     if(!app) return;
+    /* FIX (audit #4): guard the Apply URL link in the generic details modal
+       the same way handleOpenManualApplication/handleViewManualDetails do,
+       so an invalid or example.com URL never renders as a clickable link. */
+    const applyUrlLine = (app.applyUrl && isValidUrl(app.applyUrl) && !isExampleDomain(app.applyUrl))
+      ? `<a href="${escapeHtml(app.applyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(app.applyUrl)}</a>`
+      : 'Application URL unavailable.';
     openModal(`${app.jobTitle} at ${app.company}`, `
       <p><strong>Match Score:</strong> ${app.matchScore}%</p>
       <p><strong>Status:</strong> ${escapeHtml(app.status)}</p>
@@ -3153,7 +3267,7 @@ if(appsTableBodyEl){
       <p><strong>Location:</strong> ${escapeHtml(app.location)}</p>
       <p><strong>Employment Type:</strong> ${escapeHtml(app.employmentType)}</p>
       <p><strong>Experience Level:</strong> ${escapeHtml(app.experienceLevel)}</p>
-      <p><strong>Apply URL:</strong> <a href="${escapeHtml(app.applyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(app.applyUrl)}</a></p>
+      <p><strong>Apply URL:</strong> ${applyUrlLine}</p>
       ${app.coverLetter ? `<p><strong>Cover Letter:</strong><br>${escapeHtml(app.coverLetter)}</p>` : ''}
     `);
   });
