@@ -1566,8 +1566,9 @@ async function runQueueLoop(startIndex, ctx){
     if(!job){ queueEntry.status = 'completed'; continue; }
 
     if(ctx.applicationsCount >= ctx.dailyLimit){
+      // Rule #2: n19 must NEVER activate while jobs remain in queue.
+      // completeScanCycle() will handle n19 activation once all jobs are done.
       markWorkflowNodesSkipped(['n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','pending','skip']);
-      await executeWorkflowNode(job, 'n19', 'pending', 'pending');
       workflowState.pauseReason = 'daily_limit';
       workflowState.currentStatus = 'paused';
       workflowState.currentJobId = job.id;
@@ -1602,19 +1603,48 @@ async function runQueueLoop(startIndex, ctx){
   return {paused:false};
 }
 
-/* AUDIT FIX #10 — single finisher for a scan cycle: shows the exact
-   "Workflow Completed" summary, enters the Waiting-For-Next-Scan state,
-   and runs the automatic consistency check (#12) before the final
-   render, regardless of whether the scan ended because the queue was
-   exhausted or because the daily limit was hit. */
+/* Single finisher for a scan cycle. Enforces the correct post-queue
+   sequence per the workflow rules:
+     n18 deactivated → summary displayed (existing modal + toast) →
+     n19 activated → n18 neutralized (never simultaneously active with n19)
+   Rule #2: n19 NEVER activates while jobs remain — only called here,
+   after the queue is fully exhausted or the daily limit stops the run.
+   Rule #3: summary shown BEFORE n19 activates.
+   Rule #4: exact toast text required.
+   Rule #7: n18 and n19 are never simultaneously active. */
 async function completeScanCycle(pauseInfo){
   const stats = computeDashboardStats();
-  const summary = `Jobs Found: ${stats.jobsFound} • Jobs Matched: ${stats.jobsMatched} • Applications Sent: ${stats.applicationsSent} • Success: ${stats.successful} • Manual Action: ${stats.pendingReviews} • Failures: ${stats.temporaryFailures + stats.permanentFailures}`;
+  const summaryText = `Jobs Found: ${stats.jobsFound} • Jobs Matched: ${stats.jobsMatched} • Applications Sent: ${stats.applicationsSent} • Success: ${stats.successful} • Manual Action Needed: ${stats.pendingReviews} • Temporary Failure: ${stats.temporaryFailures} • Permanent Failure: ${stats.permanentFailures} • Skipped: ${stats.skipped}`;
+  const summaryHtml = `
+    <div style="display:grid;gap:12px;">
+      <p><strong>Jobs Found:</strong> ${stats.jobsFound}</p>
+      <p><strong>Jobs Matched:</strong> ${stats.jobsMatched}</p>
+      <p><strong>Applications Sent:</strong> ${stats.applicationsSent}</p>
+      <p><strong>Success:</strong> ${stats.successful}</p>
+      <p><strong>Manual Action Needed:</strong> ${stats.pendingReviews}</p>
+      <p><strong>Temporary Failure:</strong> ${stats.temporaryFailures}</p>
+      <p><strong>Permanent Failure:</strong> ${stats.permanentFailures}</p>
+      <p><strong>Skipped:</strong> ${stats.skipped}</p>
+    </div>
+  `;
 
   if(!pauseInfo || !pauseInfo.paused || pauseInfo.reason === 'daily_limit'){
+    // Step 1 — Deactivate n18 (Process Next Job): mark it completed so it stops glowing.
+    // This prevents n18 and n19 from ever being simultaneously active (Rule #7).
+    markWorkflowNode('n18', 'completed');
+
+    // Step 2 — Display the workflow summary using existing mechanisms only.
+    // openModal() is a floating overlay — it does NOT add a new workflow node.
+    addActivity(`Workflow completed. ${summaryText}`);
+    addNotification('Workflow Completed', summaryText);
+    openModal('Workflow Completed', summaryHtml);
+
+    // Step 3 — Activate n19 (Wait For Next Scan) only after queue is exhausted (Rule #2 & #3).
     await executeWorkflowNode(null, 'n19', 'pending', 'pending');
-    addActivity(`Workflow completed. ${summary}`);
-    addNotification('Workflow Completed', summary);
+
+    // Step 4 — Neutralize n18 so it never glows alongside n19 (Rule #7).
+    markWorkflowNode('n18', 'skipped');
+
     scanWaiting = true;
     workflowState.currentStatus = 'completed';
     workflowState.pauseReason = pauseInfo && pauseInfo.reason === 'daily_limit' ? 'daily_limit' : 'next_scan';
@@ -1627,7 +1657,8 @@ async function completeScanCycle(pauseInfo){
   workflowRunning = false;
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-  showToast('Workflow completed. Waiting for next scan.', 'info');
+  // Rule #4: exact required toast text.
+  showToast('Workflow completed. Waiting for next scheduled scan.', 'info');
   return {stats, check};
 }
 
@@ -1804,6 +1835,12 @@ async function runWorkflow(){
   workflowRunning = true;
   setWorkflowState('running');
   setActivePage('workflow');
+  // Rule #5: if the scheduler re-triggers from the Wait For Next Scan state,
+  // briefly highlight n19 as the handoff node before clearing and moving to n1.
+  if(scanWaiting){
+    setCurrentWorkflowNode('n19');
+    await delay(600);
+  }
   clearWorkflowNodeStyles();
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if(runBtn){ runBtn.disabled=true; runBtn.textContent='Workflow Running...'; }
