@@ -436,6 +436,13 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
   const applyUrlValue = fallbackText(source.applyUrl || source.applicationUrl || source.url || fallback.applyUrl || fallback.applicationUrl || fallback.url || '', '');
   const resumeUsedValue = Boolean(source.resumeUsed ?? source.resumeUploaded ?? source.resumeDataUrl ?? fallback.resumeUploaded ?? fallback.resumeDataUrl ?? source.resumeFileName ?? fallback.resumeFileName);
   const coverLetterUsedValue = Boolean(source.coverLetterUsed ?? source.coverLetter ?? source.autoCover ?? fallback.coverLetter ?? fallback.autoCover ?? source.coverLetterText ?? fallback.coverLetterText);
+  const manualActionReasonValue = String(source.manualActionReason ?? fallback.manualActionReason ?? '').trim();
+  const manualActionReasonHistoryValue = Array.isArray(source.manualActionReasonHistory) ? source.manualActionReasonHistory
+    : (Array.isArray(fallback.manualActionReasonHistory) ? fallback.manualActionReasonHistory : []);
+  const applicationIdValue = source.applicationId ?? fallback.applicationId ?? source.id ?? fallback.id ?? 0;
+  const workflowIdValue = fallbackText(source.workflowId || fallback.workflowId, 'workflow-default');
+  const createdAtValue = source.createdAt || fallback.createdAt || new Date().toISOString();
+  const completedAtValue = source.completedAt || fallback.completedAt || '';
   const normalized = {
     ...source,
     ...fallback,
@@ -458,7 +465,14 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
     resumeUsed: resumeUsedValue,
     coverLetterUsed: coverLetterUsedValue,
     retryCount: Number(source.retryCount ?? fallback.retryCount ?? 0) || 0,
-    notes: fallbackText(source.notes || fallback.notes || '', 'No notes yet.')
+    notes: fallbackText(source.notes || fallback.notes || '', 'No notes yet.'),
+    applicationId: applicationIdValue,
+    workflowId: workflowIdValue,
+    manualActionReason: manualActionReasonValue,
+    manualActionReasonHistory: manualActionReasonHistoryValue,
+    createdAt: createdAtValue,
+    updatedAt: new Date().toISOString(),
+    completedAt: completedAtValue,
   };
   if(!normalized.jobTitle) normalized.jobTitle = 'Job Opportunity';
   if(!normalized.company) normalized.company = 'Unknown Company';
@@ -469,6 +483,8 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
   if(!normalized.experienceLevel) normalized.experienceLevel = 'Mid Level';
   if(!normalized.applyUrl) normalized.applyUrl = '';
   if(!normalized.applicationUrl) normalized.applicationUrl = '';
+  if(!normalized.applicationId) normalized.applicationId = normalized.id;
+  if(!normalized.workflowId) normalized.workflowId = 'workflow-default';
   return normalized;
 }
 
@@ -768,6 +784,34 @@ function isValidUrl(url){
   } catch (err) {
     return false;
   }
+}
+
+const MANUAL_ACTION_REASONS = [
+  'CAPTCHA required',
+  'Login required',
+  'OTP verification required',
+  'Assessment required',
+  'Screening questions required',
+  'Missing document',
+  'Final submit must be clicked manually'
+];
+
+function pickManualActionReason(job){
+  const idx = Math.floor(Math.random() * MANUAL_ACTION_REASONS.length);
+  return MANUAL_ACTION_REASONS[idx];
+}
+
+function isExampleDomain(url){
+  try{
+    const hostname = new URL(String(url).trim()).hostname.toLowerCase();
+    return hostname === 'example.com' || hostname.endsWith('.example.com');
+  } catch(e){
+    return true;
+  }
+}
+
+function findApplicationByIdOrJobId(idOrJobId){
+  return sampleApplications.find(a=>a.id===idOrJobId) || sampleApplications.find(a=>a.jobId===idOrJobId);
 }
 
 function applyJobProviderFilters(jobs){
@@ -1114,6 +1158,10 @@ function createApplicationRecord(job, status, extra = {}){
   const applyUrl = String(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || applicationUrl).trim();
   const application = normalizeApplicationRecord({
     id: nextId,
+    applicationId: nextId,
+    workflowId: extra.workflowId || `workflow-${workflowState.currentJobId || 'run'}-${Date.now()}`,
+    createdAt: new Date().toISOString(),
+    manualActionReason: extra.manualActionReason || '',
     jobTitle: job.jobTitle || job.title,
     company: job.company,
     location: job.location,
@@ -1160,6 +1208,12 @@ function persistApplication(job, status, extra = {}){
     submittedAt: extra.submittedAt || application.submittedAt || '',
     notes: extra.notes || application.notes || '',
     workflowJobKey: getWorkflowJobKey(job),
+    manualActionReason: extra.manualActionReason !== undefined ? extra.manualActionReason : (application.manualActionReason || ''),
+    manualActionReasonHistory: extra.manualActionReasonHistory !== undefined ? extra.manualActionReasonHistory : (application.manualActionReasonHistory || []),
+    completedAt: extra.completedAt || application.completedAt || '',
+    applicationId: application.applicationId || application.id,
+    workflowId: application.workflowId || 'workflow-default',
+    createdAt: application.createdAt || new Date().toISOString(),
     demo: false
   }, job);
   if(!existing){ sampleApplications.unshift(normalized); }
@@ -1310,7 +1364,7 @@ async function processRemainingWorkflowQueue(afterJobId){
       case 'manual_action_needed':
         job.workflowStatus = 'Manual Action Needed';
         job.workflowFinalStatus = 'manual_action_needed';
-        const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'The application could not be submitted automatically.'});
+        const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'The application could not be submitted automatically.', manualActionReason: pickManualActionReason(job)});
         workflowPauseContext = {jobId: job.id, appId: manualApp.id};
         addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
         addNotification('Pending Review', `${job.jobTitle || job.title} at ${job.company} needs user action.`);
@@ -1447,7 +1501,7 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
     case 'manual_action_needed':
       job.workflowStatus = 'Manual Action Needed';
       job.workflowFinalStatus = 'manual_action_needed';
-      const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'Manual action required before submission.'});
+      const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'Manual action required before submission.', manualActionReason: pickManualActionReason(job)});
       workflowPauseContext = {jobId: job.id, appId: manualApp.id};
       if(queueEntry) queueEntry.status = 'waiting_manual_review';
       workflowState.currentStatus = 'paused';
@@ -1747,7 +1801,7 @@ async function runWorkflow(){
       case 'manual_action_needed':
         job.workflowStatus = 'Manual Action Needed';
         job.workflowFinalStatus = 'manual_action_needed';
-        const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'The application could not be submitted automatically.'});
+        const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'The application could not be submitted automatically.', manualActionReason: pickManualActionReason(job)});
         workflowPauseContext = {jobId: job.id, appId: manualApp.id};
         addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
         addNotification('Pending Review', `${job.jobTitle || job.title} at ${job.company} needs user action.`);
@@ -2778,10 +2832,20 @@ function renderApplicationsTable(){
 
   tbody.innerHTML = filtered.map(a=>{
     const meta = STATUS_META[a.status] || {cls:'',icon:''};
-    const reviewButtons = ['Pending Review','Manual Action Needed'].includes(a.status) ? `
-      <button type="button" class="apps-action-btn" data-action="approve-application" data-app-id="${a.id}">${a.status === 'Manual Action Needed' ? 'Retry' : 'Approve'}</button>
-      <button type="button" class="apps-action-btn" data-action="reject-application" data-app-id="${a.id}">Reject</button>
-    ` : '';
+    let reviewButtons = '';
+    if(a.status === 'Pending Review'){
+      reviewButtons = `
+        <button type="button" class="apps-action-btn" data-action="approve-application" data-app-id="${a.id}">Approve</button>
+        <button type="button" class="apps-action-btn" data-action="reject-application" data-app-id="${a.id}">Reject</button>
+      `;
+    } else if(a.status === 'Manual Action Needed'){
+      reviewButtons = `
+        <button type="button" class="apps-action-btn" data-action="view-manual-details" data-app-id="${a.id}">View Details</button>
+        <button type="button" class="apps-action-btn" data-action="open-manual-application" data-app-id="${a.id}">Open Application</button>
+        <button type="button" class="apps-action-btn" data-action="mark-manual-completed" data-app-id="${a.id}">Mark Completed</button>
+        <button type="button" class="apps-action-btn" data-action="mark-manual-failed" data-app-id="${a.id}">Mark Failed</button>
+      `;
+    }
     return `<tr>
       <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
       <td data-label="Company">${escapeHtml(a.company)}</td>
@@ -2789,7 +2853,7 @@ function renderApplicationsTable(){
       <td data-label="Date">${escapeHtml(`${formatSampleDate(a.date)} • ${a.time}`)}</td>
       <td data-label="Status"><span class="status-badge ${meta.cls}">${meta.icon} ${escapeHtml(a.status)}</span></td>
       <td data-label="Action">
-        <button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button>
+        ${a.status === 'Manual Action Needed' ? '' : `<button type="button" class="apps-action-btn" data-app-id="${a.id}">View</button>`}
         ${reviewButtons}
       </td>
     </tr>`;
@@ -2859,6 +2923,137 @@ if(appsSortByEl) appsSortByEl.addEventListener('change', renderApplicationsTable
 if(appsSortOrderEl) appsSortOrderEl.addEventListener('change', renderApplicationsTable);
 if(appsLoadMoreBtnEl) appsLoadMoreBtnEl.addEventListener('click', loadMoreApplications);
 
+function handleViewManualDetails(appId){
+  const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===appId));
+  if(!app) return;
+  const reason = app.manualActionReason || 'Reason not specified.';
+  const urlLine = (app.applicationUrl && isValidUrl(app.applicationUrl) && !isExampleDomain(app.applicationUrl))
+    ? `<a href="${escapeHtml(app.applicationUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(app.applicationUrl)}</a>`
+    : 'Not available';
+  openModal(`${app.jobTitle} at ${app.company}`, `
+    <p><strong>Status:</strong> Manual Action Needed</p>
+    <p><strong>Reason manual action is required:</strong> ${escapeHtml(reason)}</p>
+    <p><strong>Application URL:</strong> ${urlLine}</p>
+    <p><strong>Match Score:</strong> ${app.matchScore}%</p>
+    <p><strong>Source:</strong> ${escapeHtml(app.source)}</p>
+  `);
+}
+
+function handleOpenManualApplication(appId){
+  const app = sampleApplications.find(a=>a.id===appId);
+  if(!app) return;
+  const url = String(app.applicationUrl || app.applyUrl || '').trim();
+  if(!url || !isValidUrl(url) || isExampleDomain(url)){
+    showToast('Application URL unavailable.', 'error');
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+async function handleMarkManualCompleted(appId){
+  if(workflowRunning){ showToast('Workflow is currently running. Please wait.', 'warning'); return; }
+  const app = sampleApplications.find(a=>a.id===appId);
+  if(!app || app.status !== 'Manual Action Needed') return;
+
+  const job = getWorkflowJobForApp(app) || {
+    id: app.jobId, jobTitle: app.jobTitle, company: app.company,
+    location: app.location, source: app.source,
+    applicationUrl: app.applicationUrl, applyUrl: app.applyUrl, matchScore: app.matchScore
+  };
+
+  const reasonHistory = Array.isArray(app.manualActionReasonHistory) ? app.manualActionReasonHistory.slice() : [];
+  if(app.manualActionReason){
+    reasonHistory.push({reason: app.manualActionReason, resolvedAt: new Date().toISOString(), resolution:'completed'});
+  }
+  const completedAt = new Date().toISOString();
+
+  workflowRunning = true;
+  setWorkflowState('running');
+  const runBtn = document.querySelector('[data-action="run-workflow"]');
+  if(runBtn){ runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
+
+  persistApplication(job, 'Success', {
+    manualReviewRequired: false,
+    confirmationMessage: 'Manual application completed successfully.',
+    submittedAt: completedAt,
+    completedAt,
+    manualActionReason: '',
+    manualActionReasonHistory: reasonHistory,
+    notes: 'Manually completed by user.'
+  });
+
+  addActivity(`Manual application completed for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
+  addNotification('Manual Action Completed', 'Manual application completed successfully.');
+  renderApplicationsTable();
+  renderDashboard();
+  renderAnalytics();
+  renderNotifications();
+  showToast('Marked as completed.', 'success');
+
+  const queueEntry = findQueueEntryByJobId(job.id);
+  if(queueEntry) queueEntry.status = 'completed';
+  if(workflowPauseContext && workflowPauseContext.appId === app.id) workflowPauseContext = null;
+  workflowState.pauseReason = '';
+  workflowState.currentStatus = 'processing';
+  saveAppState();
+
+  await processRemainingWorkflowQueue(job.id);
+  workflowRunning = false;
+  if(runBtn){ runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
+}
+
+async function handleMarkManualFailed(appId){
+  if(workflowRunning){ showToast('Workflow is currently running. Please wait.', 'warning'); return; }
+  const app = sampleApplications.find(a=>a.id===appId);
+  if(!app || app.status !== 'Manual Action Needed') return;
+
+  const job = getWorkflowJobForApp(app) || {
+    id: app.jobId, jobTitle: app.jobTitle, company: app.company,
+    location: app.location, source: app.source,
+    applicationUrl: app.applicationUrl, applyUrl: app.applyUrl, matchScore: app.matchScore
+  };
+
+  const userReason = (window.prompt('Briefly describe why this application could not be completed:', app.manualActionReason || '') || '').trim();
+  const failureReason = userReason || app.manualActionReason || 'Manual action could not be completed.';
+
+  const reasonHistory = Array.isArray(app.manualActionReasonHistory) ? app.manualActionReasonHistory.slice() : [];
+  if(app.manualActionReason){
+    reasonHistory.push({reason: app.manualActionReason, resolvedAt: new Date().toISOString(), resolution:'failed'});
+  }
+
+  workflowRunning = true;
+  setWorkflowState('running');
+  const runBtn = document.querySelector('[data-action="run-workflow"]');
+  if(runBtn){ runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
+
+  persistApplication(job, 'Permanent Failure', {
+    manualReviewRequired: false,
+    failureReason,
+    manualActionReason: '',
+    manualActionReasonHistory: reasonHistory,
+    notes: 'Manually marked as failed by user.'
+  });
+
+  addActivity(`Manual application failed for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
+  addNotification('Manual Action Failed', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} could not be completed manually.`);
+  renderApplicationsTable();
+  renderDashboard();
+  renderAnalytics();
+  renderNotifications();
+  showToast('Marked as failed.', 'info');
+
+  const queueEntry = findQueueEntryByJobId(job.id);
+  if(queueEntry) queueEntry.status = 'completed';
+  if(workflowPauseContext && workflowPauseContext.appId === app.id) workflowPauseContext = null;
+  workflowState.pauseReason = '';
+  workflowState.currentStatus = 'processing';
+  saveAppState();
+
+  await processRemainingWorkflowQueue(job.id);
+  workflowRunning = false;
+  if(runBtn){ runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
+}
+
 /* single delegated listener for the "View" action button in the applications table */
 const appsTableBodyEl = document.getElementById('appsTableBody');
 if(appsTableBodyEl){
@@ -2923,6 +3118,26 @@ if(appsTableBodyEl){
           showToast('Application rejected and skipped.', 'info');
         }
       }
+      return;
+    }
+    const viewDetailsBtn = e.target.closest('[data-action="view-manual-details"]');
+    if(viewDetailsBtn){
+      handleViewManualDetails(Number(viewDetailsBtn.dataset.appId));
+      return;
+    }
+    const openAppBtn = e.target.closest('[data-action="open-manual-application"]');
+    if(openAppBtn){
+      handleOpenManualApplication(Number(openAppBtn.dataset.appId));
+      return;
+    }
+    const markCompletedBtn = e.target.closest('[data-action="mark-manual-completed"]');
+    if(markCompletedBtn){
+      await handleMarkManualCompleted(Number(markCompletedBtn.dataset.appId));
+      return;
+    }
+    const markFailedBtn = e.target.closest('[data-action="mark-manual-failed"]');
+    if(markFailedBtn){
+      await handleMarkManualFailed(Number(markFailedBtn.dataset.appId));
       return;
     }
     const btn = e.target.closest('.apps-action-btn');
