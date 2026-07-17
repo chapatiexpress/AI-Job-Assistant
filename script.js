@@ -864,8 +864,36 @@ async function runDemoScan() {
   await runWorkflow();
 }
 
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+/* ---- Workflow abort / pause control ---- */
+/* Sentinel error thrown by delay() when the user presses Stop.
+   Propagates up through every await in the async chain so runWorkflow()
+   and other top-level callers can catch it in one place. */
+class WorkflowAbortError extends Error {
+  constructor() { super('Workflow stopped by user.'); this.name = 'WorkflowAbortError'; }
+}
+
+/* delay(ms) — interruptible, pause-aware replacement for a bare setTimeout promise.
+   Polls every TICK ms so Stop or Resume take effect within 50 ms of clicking.
+   - Stop  (workflowStopped===true) → throws WorkflowAbortError.
+   - Pause (workflowPaused===true)  → spins without advancing the clock; resumes when unpaused.
+   - Normal → resolves after ms milliseconds (±TICK). */
+async function delay(ms) {
+  const TICK = 50;
+  const end = Date.now() + ms;
+  while (true) {
+    if (workflowStopped) throw new WorkflowAbortError();
+    if (workflowPaused) {
+      /* Spin in-place — do not advance the deadline while paused.
+         The current workflow node stays highlighted; the chain resumes
+         from exactly this point when workflowPaused is cleared. */
+      await new Promise(r => setTimeout(r, TICK));
+      continue;
+    }
+    const remaining = end - Date.now();
+    if (remaining <= 0) break;
+    await new Promise(r => setTimeout(r, Math.min(TICK, remaining)));
+  }
+  if (workflowStopped) throw new WorkflowAbortError();
 }
 
 const workflowEngine = typeof window !== 'undefined' && window.WorkflowEngine ? window.WorkflowEngine : {};
@@ -1039,6 +1067,19 @@ function pauseWorkflow(reason = 'manual') { return setWorkflowState('paused', { 
 function resumeWorkflow() { if (workflowState.status !== 'paused') return false; return setWorkflowState('running', { currentStatus: 'running', pauseReason: '' }); }
 function stopWorkflow(reason = 'stopped') { return setWorkflowState('stopped', { pauseReason: reason, currentStatus: 'stopped' }); }
 
+/* handleWorkflowAbort() — common cleanup when a WorkflowAbortError is caught.
+   Resets all runtime flags, restores the Run button, clears node highlights. */
+function handleWorkflowAbort() {
+  workflowRunning = false;
+  workflowPaused  = false;
+  workflowStopped = false;
+  clearWorkflowNodeStyles();
+  clearWorkflowSelection();
+  const runBtn = document.querySelector('[data-action="run-workflow"]');
+  if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
+  syncApplicationViews();
+}
+
 function prepareApplicationPayload(job) {
   const applicationUrl = sanitizeExternalUrl(job.applicationUrl || job.applyUrl || '');
   const automationPossible = Boolean(job.automationPossible !== false && profileState.resumeUploaded);
@@ -1059,6 +1100,9 @@ const WORKFLOW_STATUS_COLOR = {
   skipped: '#64748b'
 };
 let workflowRunning = false;
+let workflowPaused  = false;   // true while a user-requested pause is active
+let workflowStopped = false;   // true when Stop is pressed; causes delay() to throw
+let workflowRunId   = 0;       // incremented on every new run; stale callbacks compare against this
 let workflowPauseContext = null;
 let scanWaiting = false;
 
@@ -1471,6 +1515,7 @@ function findQueueEntryByJobId(jobId) {
    create duplicate application records" actually hold.
    ===================================================================== */
 async function runJobPipeline(job, queueEntry, ctx) {
+  if (workflowStopped) throw new WorkflowAbortError(); // fast-path stop check
   const jobKey = getWorkflowJobKey(job);
 
   // Preference filter (n8)
@@ -1559,6 +1604,10 @@ async function runJobPipeline(job, queueEntry, ctx) {
 async function runQueueLoop(startIndex, ctx) {
   const queue = workflowState.queue || [];
   for (let i = startIndex; i < queue.length; i++) {
+    /* Stop check at the top of every iteration — throws WorkflowAbortError
+       which propagates up to the nearest try/catch in the caller. */
+    if (workflowStopped) throw new WorkflowAbortError();
+
     const queueEntry = queue[i];
     if (!queueEntry || queueEntry.status === 'completed') continue;
 
@@ -1679,29 +1728,35 @@ async function completeScanCycle(pauseInfo) {
 }
 
 async function processRemainingWorkflowQueue(afterJobId) {
-  const queue = Array.isArray(workflowState.queue) ? workflowState.queue : [];
-  const startIndex = queue.findIndex(entry => entry.jobId === afterJobId);
-  if (startIndex === -1) return;
+  try {
+    const queue = Array.isArray(workflowState.queue) ? workflowState.queue : [];
+    const startIndex = queue.findIndex(entry => entry.jobId === afterJobId);
+    if (startIndex === -1) return;
 
-  const ctx = {
-    existingJobKeys: new Set(sampleApplications.filter(a => a.status !== 'Skipped').map(a => `${a.jobTitle}|${a.company}|${a.location}`)),
-    blacklistedCompanies: new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v => v.toLowerCase())),
-    dailyLimit: Number(profileState.dailyLimit) || 30,
-    applicationsCount: sampleApplications.filter(a => ['Success', 'Temporary Failure', 'Permanent Failure'].includes(a.status)).length,
-    completedJobs: 0
-  };
+    const ctx = {
+      existingJobKeys: new Set(sampleApplications.filter(a => a.status !== 'Skipped').map(a => `${a.jobTitle}|${a.company}|${a.location}`)),
+      blacklistedCompanies: new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v => v.toLowerCase())),
+      dailyLimit: Number(profileState.dailyLimit) || 30,
+      applicationsCount: sampleApplications.filter(a => ['Success', 'Temporary Failure', 'Permanent Failure'].includes(a.status)).length,
+      completedJobs: 0
+    };
 
-  const result = await runQueueLoop(startIndex + 1, ctx);
-  if (result.paused) {
-    workflowRunning = false;
-    const runBtn = document.querySelector('[data-action="run-workflow"]');
-    if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
-    if (result.reason === 'manual_review') {
-      showToast('Workflow paused for manual action.', 'warning');
-      return;
+    const result = await runQueueLoop(startIndex + 1, ctx);
+    if (result.paused) {
+      workflowRunning = false;
+      const runBtn = document.querySelector('[data-action="run-workflow"]');
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
+      if (result.reason === 'manual_review') {
+        showToast('Workflow paused for manual action.', 'warning');
+        return;
+      }
     }
+    await completeScanCycle(result);
+  } catch (err) {
+    if (err instanceof WorkflowAbortError) { handleWorkflowAbort(); return; }
+    handleWorkflowAbort();
+    throw err;
   }
-  await completeScanCycle(result);
 }
 
 async function resumeApprovalWorkflow(app, decision = 'approve') {
@@ -1811,168 +1866,195 @@ async function retryApplication(appId) {
     applicationUrl: app.applicationUrl, applyUrl: app.applyUrl, matchScore: app.matchScore
   };
 
+  workflowStopped = false;
+  workflowPaused  = false;
   workflowRunning = true;
   setWorkflowState('running');
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
 
-  const currentRetryCount = app.retryCount || 0;
-  await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
-  const resolved = resolveSubmissionOutcome(job, currentRetryCount, profileState);
-  const result = await applyOutcomeToApplication(job, resolved.outcome, {
-    retryCount: resolved.retryExhausted ? currentRetryCount : currentRetryCount + (String(resolved.outcome).toLowerCase().includes('temporary') ? 1 : 0),
-    failureReason: resolved.retryExhausted ? `Retry limit (${MAX_RETRY_COUNT}) exhausted.` : undefined,
-    extra: { notes: 'Manual retry.' }
-  });
+  try {
+    const currentRetryCount = app.retryCount || 0;
+    await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
+    const resolved = resolveSubmissionOutcome(job, currentRetryCount, profileState);
+    const result = await applyOutcomeToApplication(job, resolved.outcome, {
+      retryCount: resolved.retryExhausted ? currentRetryCount : currentRetryCount + (String(resolved.outcome).toLowerCase().includes('temporary') ? 1 : 0),
+      failureReason: resolved.retryExhausted ? `Retry limit (${MAX_RETRY_COUNT}) exhausted.` : undefined,
+      extra: { notes: 'Manual retry.' }
+    });
 
-  const toastByOutcome = {
-    success: ['Retry succeeded.', 'success'],
-    manual_action_needed: ['Retry requires manual action.', 'warning'],
-    permanent_failure: [resolved.retryExhausted ? 'Retry limit reached — marked as permanent failure.' : 'Retry failed permanently.', 'error'],
-    temporary_failure: ['Still a temporary failure. You can retry again.', 'warning']
-  };
-  const [toastMsg, toastType] = toastByOutcome[result.normalized] || ['Retry processed.', 'info'];
-  showToast(toastMsg, toastType);
+    const toastByOutcome = {
+      success: ['Retry succeeded.', 'success'],
+      manual_action_needed: ['Retry requires manual action.', 'warning'],
+      permanent_failure: [resolved.retryExhausted ? 'Retry limit reached — marked as permanent failure.' : 'Retry failed permanently.', 'error'],
+      temporary_failure: ['Still a temporary failure. You can retry again.', 'warning']
+    };
+    const [toastMsg, toastType] = toastByOutcome[result.normalized] || ['Retry processed.', 'info'];
+    showToast(toastMsg, toastType);
 
-  await executeWorkflowNode(job, 'n16', result.normalized, 'completed');
-  await executeWorkflowNode(job, 'n17', result.normalized, 'completed');
-  await executeWorkflowNode(job, 'n18', 'completed', 'completed');
+    await executeWorkflowNode(job, 'n16', result.normalized, 'completed');
+    await executeWorkflowNode(job, 'n17', result.normalized, 'completed');
+    await executeWorkflowNode(job, 'n18', 'completed', 'completed');
 
-  syncApplicationViews();
-  runConsistencyCheck();
+    syncApplicationViews();
+    runConsistencyCheck();
 
-  workflowRunning = false;
-  setWorkflowState('completed');
-  if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
+    workflowRunning = false;
+    setWorkflowState('completed');
+    if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
+  } catch (err) {
+    if (err instanceof WorkflowAbortError) { handleWorkflowAbort(); return; }
+    handleWorkflowAbort();
+    throw err;
+  }
 }
 
 async function runWorkflow() {
   if (workflowRunning) return;
+  /* Reset stop/pause flags and mint a new run-ID so any stale deferred
+     callbacks (scheduler, repeat) that captured the old ID become no-ops. */
+  workflowStopped = false;
+  workflowPaused  = false;
+  workflowRunId++;
+  const thisRunId = workflowRunId; // local snapshot for closure checks inside this run
   workflowRunning = true;
   setWorkflowState('running');
   setActivePage('workflow');
-  // Rule #5: if the scheduler re-triggers from the Wait For Next Scan state,
-  // briefly highlight n19 as the handoff node before clearing and moving to n1.
-  if (scanWaiting) {
-    setCurrentWorkflowNode('n19');
-    await delay(600);
-  }
-  clearWorkflowNodeStyles();
-  const runBtn = document.querySelector('[data-action="run-workflow"]');
-  if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
 
-  profileState = loadProfileState();
-  if (workflowState.status === 'paused' && workflowState.pauseReason) {
-    resumeWorkflow();
-  }
-  if (!validateProfileForWorkflow()) {
-    workflowRunning = false;
-    setWorkflowState('idle');
-    if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
-    return;
-  }
+  try {
+    // Rule #5: if the scheduler re-triggers from the Wait For Next Scan state,
+    // briefly highlight n19 as the handoff node before clearing and moving to n1.
+    if (scanWaiting) {
+      setCurrentWorkflowNode('n19');
+      await delay(600);
+    }
+    clearWorkflowNodeStyles();
+    const runBtn = document.querySelector('[data-action="run-workflow"]');
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
 
-  const triggerSettings = getNodeSettings('n1');
-  if (triggerSettings.enabled === false) {
-    await highlightNode('n1', 'skipped');
-    markWorkflowNodesSkipped(['n2', 'n3', 'n4', 'n5', 'n6', 'd7', 'n8', 'n9', 'n10', 'n11', 'n12', 'd13', 'n14', 'success', 'tempfail', 'manual', 'permfail', 'st-success', 'st-temp', 'st-manual', 'st-perm', 'n16', 'n17', 'n18', 'n19', 'pending', 'skip']);
-    workflowRunning = false;
-    setWorkflowState('stopped');
-    if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
-    showToast('Workflow stopped because the trigger is disabled.', 'warning');
-    return;
-  }
-
-  scanWaiting = false;
-  await highlightNode('n1');
-  await highlightNode('n2');
-
-  // ---- Find Jobs (n3) ----
-  const foundJobs = await jobProviderService.fetchJobs(createJobProviderContext());
-  const filteredJobs = applyJobProviderFilters(filterUniqueJobs(foundJobs));
-  await highlightNode('n3');
-
-  // ---- Remove Duplicates (n4) ----
-  await highlightNode('n4', filteredJobs.length ? 'completed' : 'skipped');
-
-  // ---- AI Match Jobs / Calculate Match Score (n5, n6) ----
-  const threshold = Number(profileState.minMatchScore || 75);
-  const scoredJobs = filteredJobs.map(job => {
-    const matchScore = computeJobMatchScore(job);
-    return {
-      ...job,
-      matchScore,
-      matched: matchScore >= threshold, // AUDIT FIX: matched now reflects the real threshold check, not a hardcoded `true`
-      workflowStatus: 'Found',
-      workflowFinalStatus: 'found'
-    };
-  });
-  jobsData = scoredJobs;
-  appState.jobs = jobsData;
-  saveAppState();
-  addActivity(`${scoredJobs.length} jobs were discovered.`);
-  addNotification('Job Found', `${scoredJobs.length} jobs were discovered.`);
-  await highlightNode('n5');
-  await highlightNode('n6');
-
-  // ---- Match Score Above Threshold? (d7) — single decision for the whole batch ----
-  const matchedJobs = scoredJobs.filter(job => job.matched);
-  const belowThresholdJobs = scoredJobs.filter(job => !job.matched);
-  await executeWorkflowNode(null, 'd7', 'matching', matchedJobs.length ? 'completed' : 'skipped');
-
-  belowThresholdJobs.forEach(job => {
-    job.workflowStatus = 'Skipped';
-    job.workflowFinalStatus = 'skipped';
-    persistApplication(job, 'Skipped', { skipReason: 'Match score below threshold', notes: 'Skipped because the match score was below the configured threshold.' });
-  });
-  if (belowThresholdJobs.length) {
-    await executeWorkflowNode(null, 'skip', 'skipped', 'completed');
-    await executeWorkflowNode(null, 'n18', 'completed', 'completed');
-  }
-
-  if (!matchedJobs.length) {
-    markWorkflowNodesSkipped(['n8', 'n9', 'n10', 'n11', 'n12', 'd13', 'n14', 'd15', 'success', 'tempfail', 'manual', 'permfail', 'st-success', 'st-temp', 'st-manual', 'st-perm', 'n16', 'n17', 'pending']);
-    addNotification('Jobs Matched', '0 jobs matched your configured threshold.');
-    await completeScanCycle({ paused: false });
-    return;
-  }
-
-  addNotification('Jobs Matched', `${matchedJobs.length} jobs matched your configured threshold.`);
-
-  workflowState.queue = matchedJobs.map(job => ({
-    id: job.id,
-    jobId: job.id,
-    jobTitle: job.jobTitle || job.title,
-    company: job.company,
-    matchScore: Number(job.matchScore) || 0,
-    status: 'pending',
-    attempts: 0,
-    manualReviewRequired: false,
-    createdAt: new Date().toISOString()
-  }));
-  workflowState.currentJobId = workflowState.queue[0] ? workflowState.queue[0].jobId : null;
-  workflowState.currentStatus = 'pending';
-  workflowState.pauseReason = '';
-  saveAppState();
-
-  const ctx = {
-    existingJobKeys: new Set(sampleApplications.filter(a => a.status !== 'Skipped').map(a => `${a.jobTitle}|${a.company}|${a.location}`)),
-    blacklistedCompanies: new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v => v.toLowerCase())),
-    dailyLimit: Number(profileState.dailyLimit) || 30,
-    applicationsCount: sampleApplications.filter(a => ['Success', 'Temporary Failure', 'Permanent Failure'].includes(a.status)).length,
-    completedJobs: 0
-  };
-
-  const result = await runQueueLoop(0, ctx);
-  if (result.paused) {
-    workflowRunning = false;
-    if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
-    if (result.reason === 'manual_review') {
-      showToast('Workflow paused for pending review.', 'warning');
+    profileState = loadProfileState();
+    if (workflowState.status === 'paused' && workflowState.pauseReason) {
+      resumeWorkflow();
+    }
+    if (!validateProfileForWorkflow()) {
+      workflowRunning = false;
+      setWorkflowState('idle');
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
       return;
     }
+
+    const triggerSettings = getNodeSettings('n1');
+    if (triggerSettings.enabled === false) {
+      await highlightNode('n1', 'skipped');
+      markWorkflowNodesSkipped(['n2', 'n3', 'n4', 'n5', 'n6', 'd7', 'n8', 'n9', 'n10', 'n11', 'n12', 'd13', 'n14', 'success', 'tempfail', 'manual', 'permfail', 'st-success', 'st-temp', 'st-manual', 'st-perm', 'n16', 'n17', 'n18', 'n19', 'pending', 'skip']);
+      workflowRunning = false;
+      setWorkflowState('stopped');
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
+      showToast('Workflow stopped because the trigger is disabled.', 'warning');
+      return;
+    }
+
+    scanWaiting = false;
+    await highlightNode('n1');
+    await highlightNode('n2');
+
+    // ---- Find Jobs (n3) ----
+    const foundJobs = await jobProviderService.fetchJobs(createJobProviderContext());
+    const filteredJobs = applyJobProviderFilters(filterUniqueJobs(foundJobs));
+    await highlightNode('n3');
+
+    // ---- Remove Duplicates (n4) ----
+    await highlightNode('n4', filteredJobs.length ? 'completed' : 'skipped');
+
+    // ---- AI Match Jobs / Calculate Match Score (n5, n6) ----
+    const threshold = Number(profileState.minMatchScore || 75);
+    const scoredJobs = filteredJobs.map(job => {
+      const matchScore = computeJobMatchScore(job);
+      return {
+        ...job,
+        matchScore,
+        matched: matchScore >= threshold,
+        workflowStatus: 'Found',
+        workflowFinalStatus: 'found'
+      };
+    });
+    jobsData = scoredJobs;
+    appState.jobs = jobsData;
+    saveAppState();
+    addActivity(`${scoredJobs.length} jobs were discovered.`);
+    addNotification('Job Found', `${scoredJobs.length} jobs were discovered.`);
+    await highlightNode('n5');
+    await highlightNode('n6');
+
+    // ---- Match Score Above Threshold? (d7) — single decision for the whole batch ----
+    const matchedJobs = scoredJobs.filter(job => job.matched);
+    const belowThresholdJobs = scoredJobs.filter(job => !job.matched);
+    await executeWorkflowNode(null, 'd7', 'matching', matchedJobs.length ? 'completed' : 'skipped');
+
+    belowThresholdJobs.forEach(job => {
+      job.workflowStatus = 'Skipped';
+      job.workflowFinalStatus = 'skipped';
+      persistApplication(job, 'Skipped', { skipReason: 'Match score below threshold', notes: 'Skipped because the match score was below the configured threshold.' });
+    });
+    if (belowThresholdJobs.length) {
+      await executeWorkflowNode(null, 'skip', 'skipped', 'completed');
+      await executeWorkflowNode(null, 'n18', 'completed', 'completed');
+    }
+
+    if (!matchedJobs.length) {
+      markWorkflowNodesSkipped(['n8', 'n9', 'n10', 'n11', 'n12', 'd13', 'n14', 'd15', 'success', 'tempfail', 'manual', 'permfail', 'st-success', 'st-temp', 'st-manual', 'st-perm', 'n16', 'n17', 'pending']);
+      addNotification('Jobs Matched', '0 jobs matched your configured threshold.');
+      await completeScanCycle({ paused: false });
+      return;
+    }
+
+    addNotification('Jobs Matched', `${matchedJobs.length} jobs matched your configured threshold.`);
+
+    workflowState.queue = matchedJobs.map(job => ({
+      id: job.id,
+      jobId: job.id,
+      jobTitle: job.jobTitle || job.title,
+      company: job.company,
+      matchScore: Number(job.matchScore) || 0,
+      status: 'pending',
+      attempts: 0,
+      manualReviewRequired: false,
+      createdAt: new Date().toISOString()
+    }));
+    workflowState.currentJobId = workflowState.queue[0] ? workflowState.queue[0].jobId : null;
+    workflowState.currentStatus = 'pending';
+    workflowState.pauseReason = '';
+    saveAppState();
+
+    const ctx = {
+      existingJobKeys: new Set(sampleApplications.filter(a => a.status !== 'Skipped').map(a => `${a.jobTitle}|${a.company}|${a.location}`)),
+      blacklistedCompanies: new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v => v.toLowerCase())),
+      dailyLimit: Number(profileState.dailyLimit) || 30,
+      applicationsCount: sampleApplications.filter(a => ['Success', 'Temporary Failure', 'Permanent Failure'].includes(a.status)).length,
+      completedJobs: 0
+    };
+
+    const result = await runQueueLoop(0, ctx);
+    if (result.paused) {
+      workflowRunning = false;
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
+      if (result.reason === 'manual_review') {
+        showToast('Workflow paused for pending review.', 'warning');
+        return;
+      }
+    }
+    await completeScanCycle(result);
+
+  } catch (err) {
+    if (err instanceof WorkflowAbortError) {
+      /* User pressed Stop — clean shutdown, no error displayed. */
+      handleWorkflowAbort();
+      return;
+    }
+    /* Unexpected error — reset state so buttons are not left stuck disabled. */
+    handleWorkflowAbort();
+    throw err;
   }
-  await completeScanCycle(result);
 }
 
 function resetDemoData() {
@@ -2231,9 +2313,39 @@ document.addEventListener('click', (event) => {
     if (action === 'run-demo-scan') runDemoScan();
     if (action === 'add-demo-job') addDemoJob();
     if (action === 'run-workflow') runWorkflow();
-    if (action === 'pause-workflow') { clearRepeatTimeout(); pauseWorkflow('manual'); }  // Rule #10
-    if (action === 'resume-workflow') { resumeWorkflow(); showToast('Workflow resumed.', 'success'); }
-    if (action === 'stop-workflow') { clearRepeatTimeout(); clearSchedTimer(); stopWorkflow('manual'); showToast('Workflow stopped.', 'info'); }  // Rule #10
+    if (action === 'pause-workflow') {
+      /* Pause: only valid when workflow is actively running and not already paused. */
+      if (!workflowRunning || workflowPaused) {
+        showToast('No active workflow to pause.', 'warning');
+      } else {
+        workflowPaused = true;
+        clearRepeatTimeout();        // prevent Repeat from starting a new cycle while paused
+        pauseWorkflow('manual');     // persist paused state to localStorage
+        showToast('Workflow paused.', 'warning');
+      }
+    }
+    if (action === 'resume-workflow') {
+      /* Resume: only valid when actually paused by the user (not manual-review pause). */
+      if (!workflowPaused) {
+        showToast('Workflow is not paused.', 'info');
+      } else {
+        workflowPaused = false;      // unblocks the spinning delay() in the async chain
+        resumeWorkflow();            // update persisted state
+        showToast('Workflow resumed.', 'success');
+      }
+    }
+    if (action === 'stop-workflow') {
+      /* Stop: cancel everything immediately.
+         workflowStopped=true causes delay() to throw WorkflowAbortError within 50 ms.
+         workflowPaused=false unblocks any spinning delay() so it can observe workflowStopped.
+         Incrementing workflowRunId invalidates stale scheduler / Repeat callbacks. */
+      workflowStopped = true;
+      workflowPaused  = false;       // unblock spinning loops so they throw immediately
+      workflowRunId++;               // stale deferred callbacks check this and return early
+      clearAllWorkflowTimers();
+      stopWorkflow('manual');        // persist stopped state
+      showToast('Workflow stopped.', 'info');
+    }
     if (action === 'reset-demo-data') resetDemoData();
     return;
   }
@@ -3518,6 +3630,13 @@ function clearRepeatTimeout() {
   if (_repeatTimeoutId !== null) { clearTimeout(_repeatTimeoutId); _repeatTimeoutId = null; }
 }
 
+/* clearAllWorkflowTimers() — one-stop cancel for every outstanding timer.
+   Called by Stop so no outstanding timer can restart the workflow. */
+function clearAllWorkflowTimers() {
+  clearSchedTimer();
+  clearRepeatTimeout();
+}
+
 /* isRepeatMode() — returns true when all conditions required for Repeat are met. */
 function isRepeatMode() {
   const n1 = allSettings && allSettings['n1'];
@@ -3561,8 +3680,10 @@ function scheduleRepeatCycle() {
     return;
   }
 
+  const _repeatCapturedRunId = workflowRunId; // snapshot — Stop increments this
   _repeatTimeoutId = setTimeout(async () => {
     _repeatTimeoutId = null;
+    if (workflowRunId !== _repeatCapturedRunId) return; // Stop was pressed — stale callback
     if (!isRepeatMode()) return;          // Re-check conditions before firing
     if (workflowRunning) return;          // Re-check: no simultaneous runs
     const hasPR = sampleApplications.some(a => a.status === 'Pending Review');
@@ -3581,11 +3702,17 @@ function armScheduler(intervalMs) {
   _schedIntervalMs = intervalMs;
   _schedFireAt = Date.now() + intervalMs;
 
+  const _schedCapturedRunId = workflowRunId; // snapshot — Stop increments this
   _schedTimerId = setTimeout(async () => {
     _schedTimerId = null;
     _schedFireAt  = 0;
     stopSchedTick();
     updateSchedNextLabel();
+
+    if (workflowRunId !== _schedCapturedRunId) {
+      console.log('Scheduler callback discarded — run ID mismatch (Stop was pressed).');
+      return; // stale: Stop was pressed after this timer was armed
+    }
 
     /* Pre-flight conditions (Requirement #3) */
     if (workflowRunning) {
