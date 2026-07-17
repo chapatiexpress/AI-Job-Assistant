@@ -1,498 +1,536 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Job Assistant — Automation Flow</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Job Assistant — Automation Flow</title>
+  <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
-<div id="propertiesPanel">
-  <div class="panel-header">
-    <div class="panel-header-top">
-      <div class="panel-title-group">
-        <div class="panel-icon" id="panelIcon"></div>
-        <div class="panel-title-text">
-          <div class="panel-eyebrow">PROPERTIES PANEL</div>
-          <div class="panel-name" id="panelName">No card selected</div>
-        </div>
-      </div>
-      <button id="panelCloseBtn" class="panel-close" title="Close">&times;</button>
-    </div>
-    <div class="panel-desc" id="panelDesc">Click a workflow card to view and edit its settings.</div>
-  </div>
-  <div class="panel-body" id="panelBody">
-    <div class="panel-empty">
-      <div class="panel-empty-icon">🗂️</div>
-      <p>Select a card on the canvas to configure it here.</p>
-    </div>
-  </div>
-  <div class="panel-page-nav" id="pageNav">
-    <button id="workflowNavBtn" class="page-nav-btn active" type="button" data-page="workflow">Workflow</button>
-    <button id="profileNavBtn" class="page-nav-btn" type="button" data-page="profile">Profile</button>
-  </div>
-  <div class="panel-footer" id="panelFooter" style="display:none;">
-    <button id="panelDelete" class="btn-panel btn-delete">Delete</button>
-    <button id="panelSave" class="btn-panel btn-save">Save Changes</button>
-  </div>
-</div>
-<div id="panelBackdrop"></div>
-
-<div id="mainWrap">
-  <nav id="topNav">
-    <div class="topnav-left">
-      <button id="mobileMenuBtn" class="topnav-icon-btn topnav-mobile-btn" type="button" title="Open menu">☰</button>
-      <div class="topnav-logo-icon">🤖</div>
-      <div class="topnav-logo-text">AI JOB ASSISTANT</div>
-    </div>
-    <div class="topnav-links">
-      <button class="topnav-link" type="button" data-page="dashboard">Dashboard</button>
-      <button class="topnav-link" type="button" id="topWorkflowBtn" data-page="workflow">Workflow</button>
-      <button class="topnav-link" type="button" data-page="applications">Applications</button>
-      <button class="topnav-link" type="button" data-page="analytics">Analytics</button>
-      <button class="topnav-link" type="button" id="topProfileBtn" data-page="profile">Profile</button>
-    </div>
-    <div class="topnav-right">
-      <button id="propsToggleBtn" class="topnav-icon-btn" type="button" title="Toggle Properties Panel">☰</button>
-      <button id="notificationBellBtn" class="topnav-icon-btn" type="button" title="Notifications">🔔<span id="notificationCount" class="notification-count hidden"></span></button>
-      <div class="topnav-user">
-        <div class="topnav-avatar" id="topnavAvatar">AU</div>
-        <span class="topnav-username" id="topnavUsername">Admin User</span>
-        <span class="topnav-chevron">⌄</span>
-      </div>
-    </div>
-  </nav>
-
-  <div id="notificationPanel" class="notification-panel hidden">
-    <div class="notification-panel-header">
-      <div class="notification-panel-title">Notifications</div>
-      <div class="notification-panel-actions">
-        <button id="markAllReadBtn" class="btn-panel btn-outline">Mark all read</button>
-        <button id="clearNotificationsBtn" class="btn-panel btn-delete">Clear</button>
-      </div>
-    </div>
-    <div id="notificationsList" class="notifications-list"></div>
-  </div>
-  <div id="mobileNavMenu" class="mobile-nav-menu hidden">
-    <div class="mobile-nav-menu-header">
-      <span>Menu</span>
-      <button id="mobileNavCloseBtn" class="mobile-nav-close" type="button">×</button>
-    </div>
-    <div class="mobile-nav-links">
-      <button class="mobile-nav-link" type="button" data-page="dashboard">Dashboard</button>
-      <button class="mobile-nav-link" type="button" data-page="workflow">Workflow</button>
-      <button class="mobile-nav-link" type="button" data-page="applications">Applications</button>
-      <button class="mobile-nav-link" type="button" data-page="analytics">Analytics</button>
-      <button class="mobile-nav-link" type="button" data-page="profile">Profile</button>
-    </div>
-  </div>
-  <div id="mobileNavBackdrop" class="mobile-nav-backdrop hidden"></div>
-
-  <div id="pageArea">
-  <div id="app" class="page-view active">
-  <div id="viewport">
-    <div id="canvas">
-      <svg id="lines"><defs>
-        <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
-        </marker>
-        <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="#16a34a"/>
-        </marker>
-        <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="#dc2626"/>
-        </marker>
-        <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="#ea580c"/>
-        </marker>
-        <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
-        </marker>
-      </defs></svg>
-      <!-- nodes injected by JS -->
-    </div>
-  </div>
-  <div id="controls">
-    <button id="dragmode" title="Toggle drag mode">✋</button>
-    <div style="height:6px;"></div>
-    <button id="scrollzoom" title="Toggle scroll-wheel zoom">🔍</button>
-    <div style="height:6px;"></div>
-    <button id="zin">+</button>
-    <div id="zoomlvl">100%</div>
-    <button id="zout">−</button>
-    <button id="zreset" title="Reset view" style="font-size:13px;">⟳</button>
-    <button id="runWorkflowBtn" class="quick-action-btn" type="button" data-action="run-workflow">Run Workflow</button>
-    <button id="pauseWorkflowBtn" class="quick-action-btn" type="button" data-action="pause-workflow">Pause</button>
-    <button id="resumeWorkflowBtn" class="quick-action-btn" type="button" data-action="resume-workflow">Resume</button>
-    <button id="stopWorkflowBtn" class="quick-action-btn" type="button" data-action="stop-workflow">Stop</button>
-    <button id="resetDemoBtn" class="quick-action-btn" type="button" data-action="reset-demo-data">Reset Demo Data</button>
-  </div>
-</div>
-
-<div id="profilePage" class="page-view" hidden>
-  <div class="profile-shell">
-    <div class="profile-header">
-      <div class="profile-header-left">
-        <div class="profile-title-icon">👤</div>
-        <div>
-          <h2>Profile</h2>
-          <p>Manage your profile, resume and job preferences</p>
-        </div>
-      </div>
-      <div class="profile-header-right">
-        <div id="profileLastUpdated" class="profile-last-updated"><span class="profile-last-updated-icon">📅</span> Last Updated: —</div>
-      </div>
-    </div>
-
-    <div class="profile-grid">
-      <section class="profile-card profile-card-personal">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-blue">👤</span>Personal Information</div>
-        <div class="profile-card-grid">
-          <div class="profile-avatar-panel">
-            <div id="profilePhotoPreview" class="profile-photo">AU</div>
-            <button id="changePhotoBtn" class="btn-panel btn-save profile-action-btn" type="button">Change Photo</button>
-            <div class="profile-photo-hint">Supported formats: JPG, PNG (max 5MB)</div>
-          </div>
-          <div class="profile-fields profile-fields-grid">
-            <div class="field">
-              <label for="profileFirstName">First Name</label>
-              <input id="profileFirstName" class="field-input" type="text" placeholder="Alex">
-            </div>
-            <div class="field">
-              <label for="profileLastName">Last Name</label>
-              <input id="profileLastName" class="field-input" type="text" placeholder="Walker">
-            </div>
-            <div class="field">
-              <label for="profileEmail">Email</label>
-              <input id="profileEmail" class="field-input" type="email" placeholder="alex@example.com">
-            </div>
-            <div class="field">
-              <label for="profilePhone">Phone Number</label>
-              <input id="profilePhone" class="field-input" type="tel" placeholder="+1 555 0100">
-            </div>
-            <div class="field">
-              <label for="profileLocation">Location</label>
-              <input id="profileLocation" class="field-input" type="text" placeholder="Remote / New York">
-            </div>
-            <div class="field">
-              <label for="profileLinkedin">LinkedIn URL</label>
-              <input id="profileLinkedin" class="field-input" type="url" placeholder="https://linkedin.com/in/username">
-            </div>
-            <div class="field">
-              <label for="profilePortfolio">Portfolio URL</label>
-              <input id="profilePortfolio" class="field-input" type="url" placeholder="https://portfolio.example.com">
-            </div>
+  <div id="propertiesPanel">
+    <div class="panel-header">
+      <div class="panel-header-top">
+        <div class="panel-title-group">
+          <div class="panel-icon" id="panelIcon"></div>
+          <div class="panel-title-text">
+            <div class="panel-eyebrow">PROPERTIES PANEL</div>
+            <div class="panel-name" id="panelName">No card selected</div>
           </div>
         </div>
-      </section>
+        <button id="panelCloseBtn" class="panel-close" title="Close">&times;</button>
+      </div>
+      <div class="panel-desc" id="panelDesc">Click a workflow card to view and edit its settings.</div>
+    </div>
+    <div class="panel-body" id="panelBody">
+      <div class="panel-empty">
+        <div class="panel-empty-icon">🗂️</div>
+        <p>Select a card on the canvas to configure it here.</p>
+      </div>
+    </div>
+    <div class="panel-page-nav" id="pageNav">
+      <button id="workflowNavBtn" class="page-nav-btn active" type="button" data-page="workflow">Workflow</button>
+      <button id="profileNavBtn" class="page-nav-btn" type="button" data-page="profile">Profile</button>
+    </div>
+    <div class="panel-footer" id="panelFooter" style="display:none;">
+      <button id="panelDelete" class="btn-panel btn-delete">Delete</button>
+      <button id="panelSave" class="btn-panel btn-save">Save Changes</button>
+    </div>
+  </div>
+  <div id="panelBackdrop"></div>
 
-      <section class="profile-card profile-card-professional">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-indigo">💼</span>Professional Information</div>
-        <div class="profile-fields profile-fields-grid">
-          <div class="field">
-            <label for="profileJobTitle">Current Job Title</label>
-            <input id="profileJobTitle" class="field-input" type="text" placeholder="Frontend Developer">
+  <div id="mainWrap">
+    <nav id="topNav">
+      <div class="topnav-left">
+        <button id="mobileMenuBtn" class="topnav-icon-btn topnav-mobile-btn" type="button" title="Open menu">☰</button>
+        <div class="topnav-logo-icon">🤖</div>
+        <div class="topnav-logo-text">AI JOB ASSISTANT</div>
+      </div>
+      <div class="topnav-links">
+        <button class="topnav-link" type="button" data-page="dashboard">Dashboard</button>
+        <button class="topnav-link" type="button" id="topWorkflowBtn" data-page="workflow">Workflow</button>
+        <button class="topnav-link" type="button" data-page="applications">Applications</button>
+        <button class="topnav-link" type="button" data-page="analytics">Analytics</button>
+        <button class="topnav-link" type="button" id="topProfileBtn" data-page="profile">Profile</button>
+      </div>
+      <div class="topnav-right">
+        <button id="propsToggleBtn" class="topnav-icon-btn" type="button" title="Toggle Properties Panel">☰</button>
+        <button id="notificationBellBtn" class="topnav-icon-btn" type="button" title="Notifications">🔔<span
+            id="notificationCount" class="notification-count hidden"></span></button>
+        <div class="topnav-user">
+          <div class="topnav-avatar" id="topnavAvatar">AU</div>
+          <span class="topnav-username" id="topnavUsername">Admin User</span>
+          <span class="topnav-chevron">⌄</span>
+        </div>
+      </div>
+    </nav>
+
+    <div id="notificationPanel" class="notification-panel hidden">
+      <div class="notification-panel-header">
+        <div class="notification-panel-title">Notifications</div>
+        <div class="notification-panel-actions">
+          <button id="markAllReadBtn" class="btn-panel btn-outline">Mark all read</button>
+          <button id="clearNotificationsBtn" class="btn-panel btn-delete">Clear</button>
+        </div>
+      </div>
+      <div id="notificationsList" class="notifications-list"></div>
+    </div>
+    <div id="mobileNavMenu" class="mobile-nav-menu hidden">
+      <div class="mobile-nav-menu-header">
+        <span>Menu</span>
+        <button id="mobileNavCloseBtn" class="mobile-nav-close" type="button">×</button>
+      </div>
+      <div class="mobile-nav-links">
+        <button class="mobile-nav-link" type="button" data-page="dashboard">Dashboard</button>
+        <button class="mobile-nav-link" type="button" data-page="workflow">Workflow</button>
+        <button class="mobile-nav-link" type="button" data-page="applications">Applications</button>
+        <button class="mobile-nav-link" type="button" data-page="analytics">Analytics</button>
+        <button class="mobile-nav-link" type="button" data-page="profile">Profile</button>
+      </div>
+    </div>
+    <div id="mobileNavBackdrop" class="mobile-nav-backdrop hidden"></div>
+
+    <div id="pageArea">
+      <div id="app" class="page-view active">
+        <div id="viewport">
+          <div id="canvas">
+            <svg id="lines">
+              <defs>
+                <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#475569" />
+                </marker>
+                <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#16a34a" />
+                </marker>
+                <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#dc2626" />
+                </marker>
+                <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#ea580c" />
+                </marker>
+                <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#2563eb" />
+                </marker>
+              </defs>
+            </svg>
+            <!-- nodes injected by JS -->
           </div>
-          <div class="field">
-            <label for="profileExperience">Years of Experience</label>
-            <input id="profileExperience" class="field-input" type="text" placeholder="3+ years">
-          </div>
-          <div class="field field-full">
-            <label>Skills</label>
-            <div class="tag-input">
-              <div id="profileSkillsTags" class="tag-list"></div>
-              <input id="profileSkillsInput" class="field-input tag-text-input" type="text" placeholder="Add a skill and press Enter">
+        </div>
+        <div id="controls">
+          <button id="dragmode" title="Toggle drag mode">✋</button>
+          <div style="height:6px;"></div>
+          <button id="scrollzoom" title="Toggle scroll-wheel zoom">🔍</button>
+          <div style="height:6px;"></div>
+          <button id="zin">+</button>
+          <div id="zoomlvl">100%</div>
+          <button id="zout">−</button>
+          <button id="zreset" title="Reset view" style="font-size:13px;">⟳</button>
+          <button id="runWorkflowBtn" class="quick-action-btn" type="button" data-action="run-workflow">Run
+            Workflow</button>
+          <button id="pauseWorkflowBtn" class="quick-action-btn" type="button"
+            data-action="pause-workflow">Pause</button>
+          <button id="resumeWorkflowBtn" class="quick-action-btn" type="button"
+            data-action="resume-workflow">Resume</button>
+          <button id="stopWorkflowBtn" class="quick-action-btn" type="button" data-action="stop-workflow">Stop</button>
+          <button id="resetDemoBtn" class="quick-action-btn" type="button" data-action="reset-demo-data">Reset Demo
+            Data</button>
+        </div>
+      </div>
+
+      <div id="profilePage" class="page-view" hidden>
+        <div class="profile-shell">
+          <div class="profile-header">
+            <div class="profile-header-left">
+              <div class="profile-title-icon">👤</div>
+              <div>
+                <h2>Profile</h2>
+                <p>Manage your profile, resume and job preferences</p>
+              </div>
+            </div>
+            <div class="profile-header-right">
+              <div id="profileLastUpdated" class="profile-last-updated"><span
+                  class="profile-last-updated-icon">📅</span> Last Updated: —</div>
             </div>
           </div>
-          <div class="field">
-            <label for="profileEducation">Education</label>
-            <input id="profileEducation" class="field-input" type="text" placeholder="B.Tech in Computer Science">
+
+          <div class="profile-grid">
+            <section class="profile-card profile-card-personal">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-blue">👤</span>Personal Information</div>
+              <div class="profile-card-grid">
+                <div class="profile-avatar-panel">
+                  <div id="profilePhotoPreview" class="profile-photo">AU</div>
+                  <button id="changePhotoBtn" class="btn-panel btn-save profile-action-btn" type="button">Change
+                    Photo</button>
+                  <div class="profile-photo-hint">Supported formats: JPG, PNG (max 5MB)</div>
+                </div>
+                <div class="profile-fields profile-fields-grid">
+                  <div class="field">
+                    <label for="profileFirstName">First Name</label>
+                    <input id="profileFirstName" class="field-input" type="text" placeholder="Alex">
+                  </div>
+                  <div class="field">
+                    <label for="profileLastName">Last Name</label>
+                    <input id="profileLastName" class="field-input" type="text" placeholder="Walker">
+                  </div>
+                  <div class="field">
+                    <label for="profileEmail">Email</label>
+                    <input id="profileEmail" class="field-input" type="email" placeholder="alex@example.com">
+                  </div>
+                  <div class="field">
+                    <label for="profilePhone">Phone Number</label>
+                    <input id="profilePhone" class="field-input" type="tel" placeholder="+1 555 0100">
+                  </div>
+                  <div class="field">
+                    <label for="profileLocation">Location</label>
+                    <input id="profileLocation" class="field-input" type="text" placeholder="Remote / New York">
+                  </div>
+                  <div class="field">
+                    <label for="profileLinkedin">LinkedIn URL</label>
+                    <input id="profileLinkedin" class="field-input" type="url"
+                      placeholder="https://linkedin.com/in/username">
+                  </div>
+                  <div class="field">
+                    <label for="profilePortfolio">Portfolio URL</label>
+                    <input id="profilePortfolio" class="field-input" type="url"
+                      placeholder="https://portfolio.example.com">
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="profile-card profile-card-professional">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-indigo">💼</span>Professional Information
+              </div>
+              <div class="profile-fields profile-fields-grid">
+                <div class="field">
+                  <label for="profileJobTitle">Current Job Title</label>
+                  <input id="profileJobTitle" class="field-input" type="text" placeholder="Frontend Developer">
+                </div>
+                <div class="field">
+                  <label for="profileExperience">Years of Experience</label>
+                  <input id="profileExperience" class="field-input" type="text" placeholder="3+ years">
+                </div>
+                <div class="field field-full">
+                  <label>Skills</label>
+                  <div class="tag-input">
+                    <div id="profileSkillsTags" class="tag-list"></div>
+                    <input id="profileSkillsInput" class="field-input tag-text-input" type="text"
+                      placeholder="Add a skill and press Enter">
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="profileEducation">Education</label>
+                  <input id="profileEducation" class="field-input" type="text" placeholder="B.Tech in Computer Science">
+                </div>
+                <div class="field">
+                  <label for="profileCertifications">Certifications</label>
+                  <input id="profileCertifications" class="field-input" type="text"
+                    placeholder="AWS Certified Developer">
+                </div>
+                <div class="field">
+                  <label for="profileRoles">Preferred Roles</label>
+                  <input id="profileRoles" class="field-input" type="text"
+                    placeholder="Frontend Developer, React Developer">
+                </div>
+                <div class="field">
+                  <label for="profilePreferredLocations">Preferred Locations</label>
+                  <input id="profilePreferredLocations" class="field-input" type="text"
+                    placeholder="Remote, London, Berlin">
+                </div>
+                <div class="field">
+                  <label for="profileRemotePreference">Remote Preference</label>
+                  <select id="profileRemotePreference" class="field-input">
+                    <option>Remote Only</option>
+                    <option>Hybrid</option>
+                    <option>On-site</option>
+                    <option>Any</option>
+                  </select>
+                </div>
+              </div>
+            </section>
+
+            <section class="profile-card profile-card-resume">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-green">📄</span>Resume Management</div>
+              <div class="resume-card-inner">
+                <div class="resume-file-row">
+                  <div class="resume-icon">📄</div>
+                  <div class="resume-name-block">
+                    <div id="resumeName" class="resume-name">No Resume Uploaded</div>
+                    <div id="resumeInfoText" class="resume-info-text">PDF and DOCX supported</div>
+                  </div>
+                  <div class="resume-status-block">
+                    <div id="resumeStatusBadge" class="resume-status-badge profile-status-warning">⚠ No Resume Uploaded
+                    </div>
+                    <div id="resumeUploadedDate" class="resume-uploaded-date"></div>
+                  </div>
+                </div>
+                <div class="resume-actions">
+                  <button id="uploadResumeBtn" class="btn-panel btn-save profile-action-btn" type="button">⬆ Upload
+                    New</button>
+                  <button id="replaceResumeBtn" class="btn-panel btn-outline profile-action-btn" type="button">🔄
+                    Replace</button>
+                  <button id="downloadResumeBtn" class="btn-panel btn-neutral profile-action-btn" type="button">⬇
+                    Download</button>
+                  <button id="deleteResumeBtn" class="btn-panel btn-delete profile-action-btn" type="button">🗑
+                    Delete</button>
+                </div>
+                <div class="profile-support-text">Supported formats: PDF, DOCX (Max 10MB)</div>
+              </div>
+            </section>
+
+            <section class="profile-card profile-card-ai">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-purple">🤖</span>AI Preferences</div>
+              <div class="profile-fields profile-fields-grid ai-top-fields">
+                <div class="field">
+                  <label for="profileAiModel">Preferred AI Model</label>
+                  <select id="profileAiModel" class="field-input">
+                    <option>GPT-4o</option>
+                    <option>Claude 3.5 Sonnet</option>
+                    <option>GPT-4 Turbo</option>
+                    <option>Claude 3 Opus</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="profileMinMatchScore">Minimum Match Score</label>
+                  <div class="input-suffix-wrap">
+                    <input id="profileMinMatchScore" class="field-input" type="number" min="0" max="100" value="75">
+                    <span class="input-suffix">%</span>
+                  </div>
+                  <span id="minMatchScoreValue" hidden>75</span>
+                </div>
+                <div class="field">
+                  <label for="profileDailyLimit">Daily Application Limit</label>
+                  <input id="profileDailyLimit" class="field-input" type="number" min="1" value="30">
+                </div>
+              </div>
+              <div class="ai-toggles-row">
+                <div class="field field-switch-col">
+                  <label>Auto Generate Cover Letter</label>
+                  <label class="switch"><input id="profileAutoCover" type="checkbox"><span
+                      class="slider"></span></label>
+                </div>
+                <div class="field field-switch-col">
+                  <label>Enable Auto Apply</label>
+                  <label class="switch"><input id="profileAutoApply" type="checkbox"><span
+                      class="slider"></span></label>
+                </div>
+                <div class="field field-switch-col">
+                  <label>Smart Job Matching</label>
+                  <label class="switch"><input id="profileSmartMatch" type="checkbox"><span
+                      class="slider"></span></label>
+                </div>
+                <div class="field field-switch-col">
+                  <label>Email Notifications</label>
+                  <label class="switch"><input id="profileEmailNotifications" type="checkbox"><span
+                      class="slider"></span></label>
+                </div>
+              </div>
+              <div class="ai-info-box">These preferences will be used by the automation workflow to apply for relevant
+                jobs.</div>
+            </section>
           </div>
-          <div class="field">
-            <label for="profileCertifications">Certifications</label>
-            <input id="profileCertifications" class="field-input" type="text" placeholder="AWS Certified Developer">
-          </div>
-          <div class="field">
-            <label for="profileRoles">Preferred Roles</label>
-            <input id="profileRoles" class="field-input" type="text" placeholder="Frontend Developer, React Developer">
-          </div>
-          <div class="field">
-            <label for="profilePreferredLocations">Preferred Locations</label>
-            <input id="profilePreferredLocations" class="field-input" type="text" placeholder="Remote, London, Berlin">
-          </div>
-          <div class="field">
-            <label for="profileRemotePreference">Remote Preference</label>
-            <select id="profileRemotePreference" class="field-input">
-              <option>Remote Only</option>
-              <option>Hybrid</option>
-              <option>On-site</option>
-              <option>Any</option>
-            </select>
+
+          <div class="profile-footer">
+            <button id="saveProfileBtnBottom" class="profile-save-btn profile-save-bottom" type="button">Save
+              Profile</button>
+            <div class="profile-save-note">All changes are saved automatically.</div>
           </div>
         </div>
-      </section>
+        <input id="resumeFileInput" type="file" accept=".pdf,.doc,.docx" hidden>
+        <input id="photoFileInput" type="file" accept=".jpg,.jpeg,.png" hidden>
+      </div>
 
-      <section class="profile-card profile-card-resume">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-green">📄</span>Resume Management</div>
-        <div class="resume-card-inner">
-          <div class="resume-file-row">
-            <div class="resume-icon">📄</div>
-            <div class="resume-name-block">
-              <div id="resumeName" class="resume-name">No Resume Uploaded</div>
-              <div id="resumeInfoText" class="resume-info-text">PDF and DOCX supported</div>
+      <div id="dashboardPage" class="page-view" hidden>
+        <div class="dash-shell">
+          <div class="profile-header">
+            <div class="profile-header-left">
+              <div class="profile-title-icon" style="background:var(--blue);">📊</div>
+              <div>
+                <h2>Dashboard</h2>
+                <p>Overview of your automated job search activity</p>
+              </div>
             </div>
-            <div class="resume-status-block">
-              <div id="resumeStatusBadge" class="resume-status-badge profile-status-warning">⚠ No Resume Uploaded</div>
-              <div id="resumeUploadedDate" class="resume-uploaded-date"></div>
+            <div class="profile-header-right">
+              <div class="profile-last-updated"><span class="profile-last-updated-icon">📅</span> <span
+                  id="dashUpdated">Updated just now</span></div>
             </div>
           </div>
-          <div class="resume-actions">
-            <button id="uploadResumeBtn" class="btn-panel btn-save profile-action-btn" type="button">⬆ Upload New</button>
-            <button id="replaceResumeBtn" class="btn-panel btn-outline profile-action-btn" type="button">🔄 Replace</button>
-            <button id="downloadResumeBtn" class="btn-panel btn-neutral profile-action-btn" type="button">⬇ Download</button>
-            <button id="deleteResumeBtn" class="btn-panel btn-delete profile-action-btn" type="button">🗑 Delete</button>
-          </div>
-          <div class="profile-support-text">Supported formats: PDF, DOCX (Max 10MB)</div>
-        </div>
-      </section>
 
-      <section class="profile-card profile-card-ai">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-purple">🤖</span>AI Preferences</div>
-        <div class="profile-fields profile-fields-grid ai-top-fields">
-          <div class="field">
-            <label for="profileAiModel">Preferred AI Model</label>
-            <select id="profileAiModel" class="field-input">
-              <option>GPT-4o</option>
-              <option>Claude 3.5 Sonnet</option>
-              <option>GPT-4 Turbo</option>
-              <option>Claude 3 Opus</option>
-            </select>
+          <div class="dash-grid" id="dashStatsGrid"></div>
+
+          <div class="dash-columns">
+            <section class="profile-card dash-card-section">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-blue">🕒</span>Recent Activity</div>
+              <div class="activity-list" id="dashActivityList"></div>
+            </section>
+
+            <section class="profile-card dash-card-section">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-green">📈</span>Application Status</div>
+              <div class="bar-list" id="dashStatusBars"></div>
+            </section>
           </div>
-          <div class="field">
-            <label for="profileMinMatchScore">Minimum Match Score</label>
-            <div class="input-suffix-wrap">
-              <input id="profileMinMatchScore" class="field-input" type="number" min="0" max="100" value="75">
-              <span class="input-suffix">%</span>
+
+          <section class="profile-card">
+            <div class="profile-card-title"><span class="pc-icon pc-icon-purple">⚡</span>Quick Actions</div>
+            <div class="quick-actions-row">
+              <button class="quick-action-btn" type="button" data-page="workflow">🛠 Open Workflow</button>
+              <button class="quick-action-btn" type="button" data-action="add-demo-job">➕ Add Demo Job</button>
+              <button class="quick-action-btn" type="button" data-action="run-demo-scan">⚡ Run Demo Scan</button>
+              <button class="quick-action-btn" type="button" data-page="applications">🗂 Open Applications</button>
+              <button class="quick-action-btn" type="button" data-page="profile">👤 Open Profile</button>
             </div>
-            <span id="minMatchScoreValue" hidden>75</span>
-          </div>
-          <div class="field">
-            <label for="profileDailyLimit">Daily Application Limit</label>
-            <input id="profileDailyLimit" class="field-input" type="number" min="1" value="30">
-          </div>
-        </div>
-        <div class="ai-toggles-row">
-          <div class="field field-switch-col">
-            <label>Auto Generate Cover Letter</label>
-            <label class="switch"><input id="profileAutoCover" type="checkbox"><span class="slider"></span></label>
-          </div>
-          <div class="field field-switch-col">
-            <label>Enable Auto Apply</label>
-            <label class="switch"><input id="profileAutoApply" type="checkbox"><span class="slider"></span></label>
-          </div>
-          <div class="field field-switch-col">
-            <label>Smart Job Matching</label>
-            <label class="switch"><input id="profileSmartMatch" type="checkbox"><span class="slider"></span></label>
-          </div>
-          <div class="field field-switch-col">
-            <label>Email Notifications</label>
-            <label class="switch"><input id="profileEmailNotifications" type="checkbox"><span class="slider"></span></label>
-          </div>
-        </div>
-        <div class="ai-info-box">These preferences will be used by the automation workflow to apply for relevant jobs.</div>
-      </section>
-    </div>
-
-    <div class="profile-footer">
-      <button id="saveProfileBtnBottom" class="profile-save-btn profile-save-bottom" type="button">Save Profile</button>
-      <div class="profile-save-note">All changes are saved automatically.</div>
-    </div>
-  </div>
-  <input id="resumeFileInput" type="file" accept=".pdf,.doc,.docx" hidden>
-  <input id="photoFileInput" type="file" accept=".jpg,.jpeg,.png" hidden>
-</div>
-
-<div id="dashboardPage" class="page-view" hidden>
-  <div class="dash-shell">
-    <div class="profile-header">
-      <div class="profile-header-left">
-        <div class="profile-title-icon" style="background:var(--blue);">📊</div>
-        <div>
-          <h2>Dashboard</h2>
-          <p>Overview of your automated job search activity</p>
+          </section>
         </div>
       </div>
-      <div class="profile-header-right">
-        <div class="profile-last-updated"><span class="profile-last-updated-icon">📅</span> <span id="dashUpdated">Updated just now</span></div>
-      </div>
-    </div>
 
-    <div class="dash-grid" id="dashStatsGrid"></div>
+      <div id="applicationsPage" class="page-view" hidden>
+        <div class="dash-shell">
+          <div class="profile-header">
+            <div class="profile-header-left">
+              <div class="profile-title-icon" style="background:var(--green);">🗂️</div>
+              <div>
+                <h2>Applications</h2>
+                <p>Track every job application submitted by the automation workflow</p>
+              </div>
+            </div>
+          </div>
 
-    <div class="dash-columns">
-      <section class="profile-card dash-card-section">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-blue">🕒</span>Recent Activity</div>
-        <div class="activity-list" id="dashActivityList"></div>
-      </section>
-
-      <section class="profile-card dash-card-section">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-green">📈</span>Application Status</div>
-        <div class="bar-list" id="dashStatusBars"></div>
-      </section>
-    </div>
-
-    <section class="profile-card">
-      <div class="profile-card-title"><span class="pc-icon pc-icon-purple">⚡</span>Quick Actions</div>
-      <div class="quick-actions-row">
-        <button class="quick-action-btn" type="button" data-page="workflow">🛠 Open Workflow</button>
-        <button class="quick-action-btn" type="button" data-action="add-demo-job">➕ Add Demo Job</button>
-        <button class="quick-action-btn" type="button" data-action="run-demo-scan">⚡ Run Demo Scan</button>
-        <button class="quick-action-btn" type="button" data-page="applications">🗂 Open Applications</button>
-        <button class="quick-action-btn" type="button" data-page="profile">👤 Open Profile</button>
-      </div>
-    </section>
-  </div>
-</div>
-
-<div id="applicationsPage" class="page-view" hidden>
-  <div class="dash-shell">
-    <div class="profile-header">
-      <div class="profile-header-left">
-        <div class="profile-title-icon" style="background:var(--green);">🗂️</div>
-        <div>
-          <h2>Applications</h2>
-          <p>Track every job application submitted by the automation workflow</p>
+          <section class="profile-card">
+            <div class="apps-toolbar">
+              <input id="appsSearchInput" class="field-input apps-search" type="text"
+                placeholder="Search by job title or company...">
+              <select id="appsStatusFilter" class="field-input apps-filter">
+                <option value="All">All Statuses</option>
+                <option value="Draft">Draft</option>
+                <option value="Pending Review">Pending Review</option>
+                <option value="Submitted">Submitted</option>
+                <option value="Success">Success</option>
+                <option value="Temporary Failure">Temporary Failure</option>
+                <option value="Permanent Failure">Permanent Failure</option>
+                <option value="Skipped">Skipped</option>
+              </select>
+              <select id="appsSourceFilter" class="field-input apps-filter">
+                <option value="All">All Sources</option>
+                <option value="LinkedIn">LinkedIn</option>
+                <option value="Indeed">Indeed</option>
+                <option value="Glassdoor">Glassdoor</option>
+                <option value="Company Website">Company Website</option>
+              </select>
+              <select id="appsSortBy" class="field-input apps-filter">
+                <option value="date">Sort by Date</option>
+                <option value="matchScore">Sort by Match Score</option>
+                <option value="company">Sort by Company</option>
+              </select>
+              <select id="appsSortOrder" class="field-input apps-filter">
+                <option value="desc">Newest First</option>
+                <option value="asc">Oldest First</option>
+              </select>
+            </div>
+            <div class="apps-table-wrap">
+              <table class="apps-table">
+                <thead>
+                  <tr>
+                    <th>Job Title</th>
+                    <th>Company</th>
+                    <th>Match Score</th>
+                    <th>Date</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="appsTableBody"></tbody>
+              </table>
+            </div>
+            <div id="appsEmptyState" class="apps-empty" hidden>No applications match your search or filter.</div>
+            <div class="apps-load-more-wrap">
+              <button id="appsLoadMoreBtn" class="quick-action-btn" type="button">Load More Applications</button>
+            </div>
+          </section>
         </div>
       </div>
-    </div>
 
-    <section class="profile-card">
-      <div class="apps-toolbar">
-        <input id="appsSearchInput" class="field-input apps-search" type="text" placeholder="Search by job title or company...">
-        <select id="appsStatusFilter" class="field-input apps-filter">
-          <option value="All">All Statuses</option>
-          <option value="Draft">Draft</option>
-          <option value="Pending Review">Pending Review</option>
-          <option value="Submitted">Submitted</option>
-          <option value="Success">Success</option>
-          <option value="Temporary Failure">Temporary Failure</option>
-          <option value="Permanent Failure">Permanent Failure</option>
-          <option value="Skipped">Skipped</option>
-        </select>
-        <select id="appsSourceFilter" class="field-input apps-filter">
-          <option value="All">All Sources</option>
-          <option value="LinkedIn">LinkedIn</option>
-          <option value="Indeed">Indeed</option>
-          <option value="Glassdoor">Glassdoor</option>
-          <option value="Company Website">Company Website</option>
-        </select>
-        <select id="appsSortBy" class="field-input apps-filter">
-          <option value="date">Sort by Date</option>
-          <option value="matchScore">Sort by Match Score</option>
-          <option value="company">Sort by Company</option>
-        </select>
-        <select id="appsSortOrder" class="field-input apps-filter">
-          <option value="desc">Newest First</option>
-          <option value="asc">Oldest First</option>
-        </select>
-      </div>
-      <div class="apps-table-wrap">
-        <table class="apps-table">
-          <thead>
-            <tr>
-              <th>Job Title</th>
-              <th>Company</th>
-              <th>Match Score</th>
-              <th>Date</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="appsTableBody"></tbody>
-        </table>
-      </div>
-      <div id="appsEmptyState" class="apps-empty" hidden>No applications match your search or filter.</div>
-      <div class="apps-load-more-wrap">
-        <button id="appsLoadMoreBtn" class="quick-action-btn" type="button">Load More Applications</button>
-      </div>
-    </section>
-  </div>
-</div>
+      <div id="analyticsPage" class="page-view" hidden>
+        <div class="dash-shell">
+          <div class="profile-header">
+            <div class="profile-header-left">
+              <div class="profile-title-icon" style="background:var(--purple);">📈</div>
+              <div>
+                <h2>Analytics</h2>
+                <p>Match-score trends, response rates, and other insights</p>
+              </div>
+            </div>
+          </div>
 
-<div id="analyticsPage" class="page-view" hidden>
-  <div class="dash-shell">
-    <div class="profile-header">
-      <div class="profile-header-left">
-        <div class="profile-title-icon" style="background:var(--purple);">📈</div>
-        <div>
-          <h2>Analytics</h2>
-          <p>Match-score trends, response rates, and other insights</p>
+          <div class="dash-grid" id="analyticsStatsGrid"></div>
+
+          <div class="dash-columns">
+            <section class="profile-card dash-card-section">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-blue">📊</span>Applications by Status</div>
+              <div class="bar-list" id="analyticsStatusBars"></div>
+            </section>
+
+            <section class="profile-card dash-card-section">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-indigo">🌐</span>Applications by Source</div>
+              <div class="bar-list" id="analyticsSourceBars"></div>
+            </section>
+          </div>
+
+          <section class="profile-card">
+            <div class="profile-card-title"><span class="pc-icon pc-icon-green">🧾</span>Recent Performance Summary
+            </div>
+            <div id="analyticsSummaryText" class="analytics-summary-text"></div>
+          </section>
+          <div class="analytics-grid">
+            <section class="profile-card analytics-card">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-blue">📊</span>Status Distribution</div>
+              <div id="analyticsStatusChart" class="analytics-chart"></div>
+            </section>
+            <section class="profile-card analytics-card">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-green">🎯</span>Match Score Distribution
+              </div>
+              <div id="analyticsMatchChart" class="analytics-chart"></div>
+            </section>
+            <section class="profile-card analytics-card">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-purple">🌐</span>Applications by Source</div>
+              <div id="analyticsSourceChart" class="analytics-chart"></div>
+            </section>
+            <section class="profile-card analytics-card">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-indigo">📅</span>Applications by Day</div>
+              <div id="analyticsDayChart" class="analytics-chart"></div>
+            </section>
+            <section class="profile-card analytics-card">
+              <div class="profile-card-title"><span class="pc-icon pc-icon-orange">💼</span>Applications by Role</div>
+              <div id="analyticsRoleChart" class="analytics-chart"></div>
+            </section>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /#pageArea -->
+    <div id="modalBackdrop" class="modal-backdrop hidden"></div>
+    <div id="detailModal" class="modal hidden">
+      <div class="modal-inner">
+        <div class="modal-header">
+          <h3 id="modalTitle">Application Details</h3>
+          <button id="modalCloseBtn" type="button" class="modal-close">×</button>
+        </div>
+        <div id="modalContent" class="modal-content"></div>
+        <div class="modal-actions">
+          <button id="modalCloseBtn2" class="btn-panel btn-outline" type="button">Close</button>
         </div>
       </div>
     </div>
+    <div id="toast" class="toast hidden"></div>
+  </div><!-- /#mainWrap -->
 
-    <div class="dash-grid" id="analyticsStatsGrid"></div>
-
-    <div class="dash-columns">
-      <section class="profile-card dash-card-section">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-blue">📊</span>Applications by Status</div>
-        <div class="bar-list" id="analyticsStatusBars"></div>
-      </section>
-
-      <section class="profile-card dash-card-section">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-indigo">🌐</span>Applications by Source</div>
-        <div class="bar-list" id="analyticsSourceBars"></div>
-      </section>
-    </div>
-
-    <section class="profile-card">
-      <div class="profile-card-title"><span class="pc-icon pc-icon-green">🧾</span>Recent Performance Summary</div>
-      <div id="analyticsSummaryText" class="analytics-summary-text"></div>
-    </section>
-    <div class="analytics-grid">
-      <section class="profile-card analytics-card">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-blue">📊</span>Status Distribution</div>
-        <div id="analyticsStatusChart" class="analytics-chart"></div>
-      </section>
-      <section class="profile-card analytics-card">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-green">🎯</span>Match Score Distribution</div>
-        <div id="analyticsMatchChart" class="analytics-chart"></div>
-      </section>
-      <section class="profile-card analytics-card">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-purple">🌐</span>Applications by Source</div>
-        <div id="analyticsSourceChart" class="analytics-chart"></div>
-      </section>
-      <section class="profile-card analytics-card">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-indigo">📅</span>Applications by Day</div>
-        <div id="analyticsDayChart" class="analytics-chart"></div>
-      </section>
-      <section class="profile-card analytics-card">
-        <div class="profile-card-title"><span class="pc-icon pc-icon-orange">💼</span>Applications by Role</div>
-        <div id="analyticsRoleChart" class="analytics-chart"></div>
-      </section>
-    </div>
-  </div>
-</div>
-
-  </div><!-- /#pageArea -->
-  <div id="modalBackdrop" class="modal-backdrop hidden"></div>
-  <div id="detailModal" class="modal hidden">
-    <div class="modal-inner">
-      <div class="modal-header">
-        <h3 id="modalTitle">Application Details</h3>
-        <button id="modalCloseBtn" type="button" class="modal-close">×</button>
-      </div>
-      <div id="modalContent" class="modal-content"></div>
-      <div class="modal-actions">
-        <button id="modalCloseBtn2" class="btn-panel btn-outline" type="button">Close</button>
-      </div>
-    </div>
-  </div>
-  <div id="toast" class="toast hidden"></div>
-</div><!-- /#mainWrap -->
-
-<script src="workflow-engine.js"></script>
-<script src="script.js"></script>
-<!-- redeploy -->
+  <script src="workflow-engine.js"></script>
+  <script src="script.js"></script>
+  <!-- redeploy -->
 </body>
 </html>
