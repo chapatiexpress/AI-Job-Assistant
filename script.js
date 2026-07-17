@@ -432,7 +432,8 @@ const DEFAULT_APP_STATE = {
   activity: [],
   jobs: [],
   applications: [],
-  settings: { nextJobId: 101, nextApplicationId: 1, pageSize: 8, demoMode: false }
+  settings: { nextJobId: 101, nextApplicationId: 1, pageSize: 8, demoMode: false },
+  lastUpdatedAt: null
 };
 
 /* ---------------------------------------------------------------------
@@ -479,40 +480,11 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null) {
   const sourceName = fallbackText(source.source || fallback.source || source.provider || 'Unknown Source', 'Unknown Source');
   const employmentType = fallbackText(source.employmentType || source.jobType || fallback.employmentType || fallback.jobType || 'Full-time', 'Full-time');
   const experienceLevel = fallbackText(source.experienceLevel || source.experience || fallback.experienceLevel || fallback.experience || 'Mid Level', 'Mid Level');
-  /* ------------------------------------------------------------------
-     Timestamp derivation — authoritative order:
-       1. source.createdAt (full ISO string, always has time component)
-       2. source.date (may be date-only YYYY-MM-DD — do NOT derive time from this)
-       3. No valid timestamp → dateValue='', timeValue='Date unavailable'
-
-     Rule: NEVER call new Date() here. normalizeApplicationRecord() is a
-     pure read/display function. Stamping new timestamps on read causes
-     every render call to mutate all old records with the current time.
-     Write paths (persistApplication, retryApplication) stamp their own
-     updatedAt/lastRetryAt before calling persistApplication.
-  ------------------------------------------------------------------ */
-  const rawCreatedAt = source.createdAt || fallback.createdAt || '';
-  const parsedCreatedAt = rawCreatedAt ? new Date(rawCreatedAt) : null;
-  const createdAtValid = parsedCreatedAt && !Number.isNaN(parsedCreatedAt.getTime());
-
-  const rawDateOnly = source.date || fallback.date || source.postedDate || '';
-
-  let dateValue, timeValue;
-  if (createdAtValid) {
-    /* Full ISO timestamp available — derive both date and time from it. */
-    dateValue = rawDateOnly || parsedCreatedAt.toISOString().slice(0, 10);
-    timeValue = source.time || parsedCreatedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  } else if (rawDateOnly) {
-    /* Date-only string — show date but no reliable time. */
-    const parsedDateOnly = new Date(rawDateOnly + 'T00:00:00'); // force local midnight parse
-    dateValue = !Number.isNaN(parsedDateOnly.getTime()) ? parsedDateOnly.toISOString().slice(0, 10) : '';
-    timeValue = source.time || 'Date unavailable'; // never derive time from a date-only string
-  } else {
-    /* No valid timestamp at all — old record. */
-    dateValue = '';
-    timeValue = 'Date unavailable';
-  }
-  const dateTimeValue = dateValue && timeValue !== 'Date unavailable' ? `${dateValue} ${timeValue}` : (dateValue || '');
+  const rawDateValue = source.date || source.postedDate || source.createdAt || source.dateTime || fallback.date || fallback.postedDate || new Date().toISOString();
+  const parsedDate = new Date(rawDateValue);
+  const dateValue = !Number.isNaN(parsedDate) ? parsedDate.toISOString().slice(0, 10) : fallbackText(String(rawDateValue || '').slice(0, 10), new Date().toISOString().slice(0, 10));
+  const timeValue = fallbackText(source.time || source.createdTime || (source.dateTime && String(source.dateTime).split(' ').slice(1).join(' ') || ''), parsedDate && !Number.isNaN(parsedDate) ? parsedDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }));
+  const dateTimeValue = fallbackText(source.dateTime || `${dateValue} ${timeValue}`, `${dateValue} ${timeValue}`);
   const matchScoreValue = Number.isFinite(Number(source.matchScore ?? fallback.matchScore ?? 0)) ? Number(source.matchScore ?? fallback.matchScore ?? 0) : 0;
   let statusValue = fallbackText(source.status || fallback.status || 'Pending Review', 'Pending Review');
   if (!ALLOWED_APPLICATION_STATUSES.has(statusValue)) statusValue = 'Pending Review'; // AUDIT #12: repair invalid status
@@ -525,9 +497,7 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null) {
     : (Array.isArray(fallback.manualActionReasonHistory) ? fallback.manualActionReasonHistory : []);
   const applicationIdValue = source.applicationId ?? fallback.applicationId ?? source.id ?? fallback.id ?? 0;
   const workflowIdValue = fallbackText(source.workflowId || fallback.workflowId, 'workflow-default');
-  /* createdAt: preserve the original timestamp — never re-stamp with new Date().
-     updatedAt is set ONLY by the write paths (persistApplication), not here. */
-  const createdAtValue = rawCreatedAt || source.submittedAt || fallback.submittedAt || '';
+  const createdAtValue = source.createdAt || fallback.createdAt || new Date().toISOString();
   const completedAtValue = source.completedAt || fallback.completedAt || '';
   const retryCountValue = Math.max(0, Number(source.retryCount ?? fallback.retryCount ?? 0) || 0);
   const normalized = {
@@ -559,7 +529,7 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null) {
     manualActionReason: manualActionReasonValue,
     manualActionReasonHistory: manualActionReasonHistoryValue,
     createdAt: createdAtValue,
-    updatedAt: source.updatedAt || fallback.updatedAt || '',  // read-only — set by write paths only
+    updatedAt: new Date().toISOString(),
     completedAt: completedAtValue,
   };
   if (!normalized.jobTitle) normalized.jobTitle = 'Job Opportunity';
@@ -660,7 +630,8 @@ function loadAppState() {
         activity: Array.isArray(cleaned.activity) ? cleaned.activity : DEFAULT_APP_STATE.activity.slice(),
         jobs: Array.isArray(cleaned.jobs) ? cleaned.jobs.map(job => normalizeApplicationRecord(job, job)) : DEFAULT_APP_STATE.jobs.slice(),
         applications: Array.isArray(cleaned.applications) ? cleaned.applications.map(app => normalizeApplicationRecord(app)) : DEFAULT_APP_STATE.applications.slice(),
-        settings: { ...DEFAULT_APP_STATE.settings, ...(cleaned.settings || {}) }
+        settings: { ...DEFAULT_APP_STATE.settings, ...(cleaned.settings || {}) },
+        lastUpdatedAt: cleaned.lastUpdatedAt || null
       };
     }
   } catch (e) { }
@@ -696,6 +667,10 @@ function saveAppState() {
   sampleApplications = appState.applications; // single source of truth: same array reference everywhere
   if (!appState.notifications) appState.notifications = [];
   if (!appState.activity) appState.activity = [];
+  /* Single point where the app's "last updated" timestamp is captured — generated
+     once per actual state change (not on every re-render), reused everywhere via
+     formatDateTime(appState.lastUpdatedAt) and persisted so it survives refresh. */
+  appState.lastUpdatedAt = new Date().toISOString();
   localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState));
 }
 
@@ -740,7 +715,7 @@ function renderNotifications() {
     <div class="notification-item ${n.read ? 'read' : 'unread'}" data-notification-id="${n.id}">
       <div class="notification-item-title">${escapeHtml(n.title)}</div>
       <div class="notification-item-message">${escapeHtml(n.message)}</div>
-      <div class="notification-item-meta">${new Date(n.date).toLocaleString()}</div>
+      <div class="notification-item-meta">${formatDateTime(n.date)}</div>
     </div>
   `).join('') : '<div class="notification-empty">No notifications yet.</div>';
   updateNotificationBadge();
@@ -814,11 +789,7 @@ function buildApplicationDetailsHtml(app) {
       <p><strong>Source:</strong> ${escapeHtml(normalized.source)}</p>
       <p><strong>Match Score:</strong> ${escapeHtml(String(normalized.matchScore))}%</p>
       <p><strong>Status:</strong> ${escapeHtml(normalized.status)}</p>
-      <p><strong>Submission Time:</strong> ${escapeHtml(
-        normalized.date && normalized.time && normalized.time !== 'Date unavailable'
-          ? `${normalized.date} \u2022 ${normalized.time}`
-          : 'Date unavailable'
-      )}</p>
+      <p><strong>Submission Time:</strong> ${escapeHtml(formatDateTime(normalized.createdAt || normalized.dateTime || normalized.date))}</p>
       <p><strong>Resume:</strong> ${escapeHtml(normalized.resumeUsed ? 'Used' : 'Not used')}</p>
       ${coverLetterUsedLine}
       ${manualReasonLine}
@@ -1394,7 +1365,7 @@ async function applyOutcomeToApplication(job, outcome, opts = {}) {
       finalStatus = 'Success';
       job.workflowStatus = 'Success';
       job.workflowFinalStatus = 'success';
-      extra = { confirmationMessage: 'Application submitted successfully.', submittedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), failureReason: '', manualActionReason: '', ...opts.extra };
+      extra = { confirmationMessage: 'Application submitted successfully.', submittedAt: new Date().toISOString(), failureReason: '', manualActionReason: '', ...opts.extra };
       persistApplication(job, finalStatus, extra);
       addActivity(`Application succeeded for ${job.jobTitle || job.title} at ${job.company}.`);
       addNotification('Application Submitted', `${job.jobTitle || job.title} at ${job.company} was submitted successfully.`);
@@ -1403,7 +1374,7 @@ async function applyOutcomeToApplication(job, outcome, opts = {}) {
       finalStatus = 'Temporary Failure';
       job.workflowStatus = 'Temporary Failure';
       job.workflowFinalStatus = 'temporary_failure';
-      extra = { failureReason: 'Temporary failure during submission.', updatedAt: new Date().toISOString(), retryCount: (opts.retryCount ?? job.retryCount ?? 0), nextRetryAt: new Date().toISOString(), ...opts.extra };
+      extra = { failureReason: 'Temporary failure during submission.', retryCount: (opts.retryCount ?? job.retryCount ?? 0), nextRetryAt: new Date().toISOString(), ...opts.extra };
       persistApplication(job, finalStatus, extra);
       addActivity(`Application temporarily failed for ${job.jobTitle || job.title} at ${job.company}.`);
       addNotification('Temporary Failure', `${job.jobTitle || job.title} at ${job.company} needs another attempt.`);
@@ -1412,7 +1383,7 @@ async function applyOutcomeToApplication(job, outcome, opts = {}) {
       finalStatus = 'Manual Action Needed';
       job.workflowStatus = 'Manual Action Needed';
       job.workflowFinalStatus = 'manual_action_needed';
-      extra = { manualReviewRequired: true, failureReason: 'Manual action required.', updatedAt: new Date().toISOString(), manualActionReason: pickManualActionReason(job), ...opts.extra };
+      extra = { manualReviewRequired: true, failureReason: 'Manual action required.', manualActionReason: pickManualActionReason(job), ...opts.extra };
       persistApplication(job, finalStatus, extra);
       addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
       addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
@@ -1421,7 +1392,7 @@ async function applyOutcomeToApplication(job, outcome, opts = {}) {
       finalStatus = 'Permanent Failure';
       job.workflowStatus = 'Permanent Failure';
       job.workflowFinalStatus = 'permanent_failure';
-      extra = { failureReason: opts.failureReason || 'Permanent failure during submission.', updatedAt: new Date().toISOString(), manualActionReason: '', ...opts.extra };
+      extra = { failureReason: opts.failureReason || 'Permanent failure during submission.', manualActionReason: '', ...opts.extra };
       persistApplication(job, finalStatus, extra);
       addActivity(`Application permanently failed for ${job.jobTitle || job.title} at ${job.company}.`);
       addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted. No further retries will be attempted.`);
@@ -1454,11 +1425,18 @@ function createApplicationRecord(job, status, extra = {}) {
   const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
   const applicationUrl = sanitizeExternalUrl(extra.applicationUrl || extra.applyUrl || job.applicationUrl || job.applyUrl || '');
   const applyUrl = sanitizeExternalUrl(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || applicationUrl);
+  /* Single timestamp captured once, at the moment this application record is
+     created, and reused everywhere for this job (createdAt/date/time all
+     derive from the same `now`). It is stored in the record (and therefore
+     in localStorage via saveAppState), so every subsequent normalization or
+     re-render reuses this exact value instead of generating a new one. */
+  const now = new Date();
+  const nowIso = now.toISOString();
   const application = normalizeApplicationRecord({
     id: nextId,
     applicationId: nextId,
     workflowId: extra.workflowId || `workflow-${workflowState.currentJobId || 'run'}-${Date.now()}`,
-    createdAt: new Date().toISOString(),
+    createdAt: nowIso,
     manualActionReason: extra.manualActionReason || '',
     jobTitle: job.jobTitle || job.title,
     company: job.company,
@@ -1467,8 +1445,8 @@ function createApplicationRecord(job, status, extra = {}) {
     applicationUrl,
     applyUrl,
     matchScore: Number(job.matchScore) || 0,
-    date: source.date || new Date().toISOString().slice(0, 10),
-    time: source.time || new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
+    date: nowIso.slice(0, 10),
+    time: now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
     status,
     coverLetter: profileState.autoCover ? createCoverLetter(job) : '',
     notes: extra.notes || '',
@@ -1502,8 +1480,6 @@ function persistApplication(job, status, extra = {}) {
     applyUrl,
     matchScore: Number(job.matchScore) || application.matchScore || 0,
     date: application.date || new Date().toISOString().slice(0, 10),
-    time: application.time && application.time !== 'Date unavailable' ? application.time : new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
-    updatedAt: new Date().toISOString(),   // write path — stamp now
     status,
     coverLetter: extra.coverLetter !== undefined ? extra.coverLetter : (application.coverLetter || (profileState.autoCover ? createCoverLetter(job) : '')),
     manualReviewRequired: extra.manualReviewRequired !== undefined ? extra.manualReviewRequired : Boolean(application.manualReviewRequired),
@@ -1518,7 +1494,6 @@ function persistApplication(job, status, extra = {}) {
     manualActionReason: extra.manualActionReason !== undefined ? extra.manualActionReason : (application.manualActionReason || ''),
     manualActionReasonHistory: extra.manualActionReasonHistory !== undefined ? extra.manualActionReasonHistory : (application.manualActionReasonHistory || []),
     completedAt: extra.completedAt || application.completedAt || '',
-    lastRetryAt: extra.lastRetryAt || application.lastRetryAt || '',
     applicationId: application.applicationId || application.id,
     workflowId: application.workflowId || 'workflow-default',
     createdAt: application.createdAt || new Date().toISOString(),
@@ -1631,10 +1606,6 @@ async function runJobPipeline(job, queueEntry, ctx) {
   await executeWorkflowNode(job, 'n16', 'completed', 'completed');
   await executeWorkflowNode(job, 'n17', 'completed', 'completed');
   await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-  /* Immediately neutralize n18 so it does not glow into the next job or
-     compete with n19. completeScanCycle() will also ensure n18 is skipped
-     before activating n19 as a belt-and-suspenders guarantee. */
-  markWorkflowNode('n18', 'skipped');
   const counted = ['success', 'temporary_failure', 'permanent_failure'].includes(result.normalized);
   return { status: result.normalized, counted };
 }
@@ -1706,7 +1677,11 @@ async function runQueueLoop(startIndex, ctx) {
    Rule #7: n18 and n19 are never simultaneously active. */
 async function completeScanCycle(pauseInfo) {
   const stats = computeDashboardStats();
-  const summaryText = `Jobs Found: ${stats.jobsFound} • Jobs Matched: ${stats.jobsMatched} • Applications Sent: ${stats.applicationsSent} • Success: ${stats.successful} • Manual Action Needed: ${stats.pendingReviews} • Temporary Failure: ${stats.temporaryFailures} • Permanent Failure: ${stats.permanentFailures} • Skipped: ${stats.skipped}`;
+  /* Single timestamp captured once for this scan-completion event, reused
+     across the toast/summary/activity/notification for this cycle instead
+     of being re-generated in each place. */
+  const completedAt = new Date().toISOString();
+  const summaryText = `Jobs Found: ${stats.jobsFound} • Jobs Matched: ${stats.jobsMatched} • Applications Sent: ${stats.applicationsSent} • Success: ${stats.successful} • Manual Action Needed: ${stats.pendingReviews} • Temporary Failure: ${stats.temporaryFailures} • Permanent Failure: ${stats.permanentFailures} • Skipped: ${stats.skipped} • Completed At: ${formatDateTime(completedAt)}`;
   const summaryHtml = `
     <div style="display:grid;gap:12px;">
       <p><strong>Jobs Found:</strong> ${stats.jobsFound}</p>
@@ -1717,22 +1692,26 @@ async function completeScanCycle(pauseInfo) {
       <p><strong>Temporary Failure:</strong> ${stats.temporaryFailures}</p>
       <p><strong>Permanent Failure:</strong> ${stats.permanentFailures}</p>
       <p><strong>Skipped:</strong> ${stats.skipped}</p>
+      <p><strong>Completed At:</strong> ${formatDateTime(completedAt)}</p>
     </div>
   `;
 
   if (!pauseInfo || !pauseInfo.paused || pauseInfo.reason === 'daily_limit') {
-    // Step 1 — Fully neutralize n18 (Process Next Job) BEFORE activating n19.
-    // Using 'skipped' (not 'completed') removes the green glow entirely so
-    // n18 and n19 are never simultaneously highlighted (Rule #7).
-    markWorkflowNode('n18', 'skipped');
+    // Step 1 — Deactivate n18 (Process Next Job): mark it completed so it stops glowing.
+    // This prevents n18 and n19 from ever being simultaneously active (Rule #7).
+    markWorkflowNode('n18', 'completed');
 
-    // Step 2 — Display the workflow summary.
+    // Step 2 — Display the workflow summary using existing mechanisms only.
+    // openModal() is a floating overlay — it does NOT add a new workflow node.
     addActivity(`Workflow completed. ${summaryText}`);
     addNotification('Workflow Completed', summaryText);
     openModal('Workflow Completed', summaryHtml);
 
-    // Step 3 — Activate n19 (Wait For Next Scan) only after n18 is fully neutral.
+    // Step 3 — Activate n19 (Wait For Next Scan) only after queue is exhausted (Rule #2 & #3).
     await executeWorkflowNode(null, 'n19', 'pending', 'pending');
+
+    // Step 4 — Neutralize n18 so it never glows alongside n19 (Rule #7).
+    markWorkflowNode('n18', 'skipped');
 
     scanWaiting = true;
     workflowState.currentStatus = 'completed';
@@ -1920,7 +1899,7 @@ async function retryApplication(appId) {
     const result = await applyOutcomeToApplication(job, resolved.outcome, {
       retryCount: resolved.retryExhausted ? currentRetryCount : currentRetryCount + (String(resolved.outcome).toLowerCase().includes('temporary') ? 1 : 0),
       failureReason: resolved.retryExhausted ? `Retry limit (${MAX_RETRY_COUNT}) exhausted.` : undefined,
-      extra: { notes: 'Manual retry.', lastRetryAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+      extra: { notes: 'Manual retry.' }
     });
 
     const toastByOutcome = {
@@ -2463,6 +2442,16 @@ function formatBytes(bytes) {
   return `${value.toFixed(1)} ${units[index]}`;
 }
 
+/* ---------------------------------------------------------------------
+   formatDateTime() — THE single shared helper used everywhere a full,
+   friendly date + time needs to be displayed (Profile Last Updated,
+   Resume Uploaded date, Dashboard "Updated" time, Applications table
+   Date column, Application Details "Submission Time", Recent Activity,
+   Workflow Completed summary, and Notifications). There is intentionally
+   only one such formatting function in the whole project — every call
+   site below reuses it instead of re-implementing its own date/time
+   formatting, so the display format can never drift between pages.
+   --------------------------------------------------------------------- */
 function formatDateTime(iso) {
   if (!iso) return '—';
   const date = new Date(iso);
@@ -3115,7 +3104,7 @@ function renderDashboard() {
         <div class="activity-icon ${meta.cls}">${meta.icon}</div>
         <div class="activity-body">
           <div class="activity-title">${escapeHtml(a.jobTitle || 'Job Opportunity')} — ${escapeHtml(a.company || 'Unknown Company')}</div>
-          <div class="activity-meta">${escapeHtml(a.status || 'Pending Review')} • ${escapeHtml(formatSampleDate(a.date) || 'Pending')} • ${escapeHtml(a.time || 'Time pending')}</div>
+          <div class="activity-meta">${escapeHtml(a.status || 'Pending Review')} • ${escapeHtml(formatDateTime(a.createdAt || a.date))}</div>
         </div>
       </div>`;
     }).join('') : '<div class="apps-empty">No recent activity yet.</div>';
@@ -3126,7 +3115,11 @@ function renderDashboard() {
 
   const updatedEl = document.getElementById('dashUpdated');
   if (updatedEl) {
-    updatedEl.textContent = 'Updated ' + new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    /* Reuses the single lastUpdatedAt timestamp captured in saveAppState()
+       whenever the app's data actually changed — does NOT generate a new
+       timestamp on every render, so re-opening the Dashboard shows the
+       same "Updated" time until a new job/action actually changes data. */
+    updatedEl.textContent = 'Updated ' + formatDateTime(appState.lastUpdatedAt || new Date().toISOString());
   }
 }
 
@@ -3198,11 +3191,7 @@ function renderApplicationsTable() {
       <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
       <td data-label="Company">${escapeHtml(a.company)}</td>
       <td data-label="Match Score"><span class="match-score-pill">${a.matchScore}%</span></td>
-      <td data-label="Date">${escapeHtml(
-        a.date && a.time && a.time !== 'Date unavailable'
-          ? `${a.date} \u2022 ${a.time}`
-          : (a.date ? a.date : 'Date unavailable')
-      )}</td>
+      <td data-label="Date">${escapeHtml(formatDateTime(a.createdAt || a.dateTime || a.date))}</td>
       <td data-label="Status"><span class="status-badge ${meta.cls}">${meta.icon} ${escapeHtml(a.status)}</span></td>
       <td data-label="Action">
         ${a.status === 'Manual Action Needed' || a.status === 'Temporary Failure' ? '' : `<button type="button" class="apps-action-btn" data-action="view-application" data-app-id="${a.id}">View</button>`}
