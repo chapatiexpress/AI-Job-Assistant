@@ -541,7 +541,8 @@ function saveAppState(){
     allSettings.workflowState = workflowState || createDefaultWorkflowState();
   }
   appState.jobs = (jobsData || []).map(job=>normalizeApplicationRecord(job, job));
-  appState.applications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
+  appState.applications = ((Array.isArray(sampleApplications) ? sampleApplications : []) || []).map(app=>normalizeApplicationRecord(app));
+  sampleApplications = appState.applications;
   if(!appState.notifications) appState.notifications = [];
   if(!appState.activity) appState.activity = [];
   localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState));
@@ -557,6 +558,7 @@ function addActivity(message){
 function addNotification(title,message){
   const normalizedTitle = String(title || '').trim();
   const normalizedMessage = String(message || '').trim();
+  if(!normalizedTitle || !normalizedMessage) return;
   const duplicate = appState.notifications.some(note => note.title === normalizedTitle && note.message === normalizedMessage);
   if(duplicate) return;
   appState.notifications.unshift({id:Date.now(),title:normalizedTitle,message:normalizedMessage,date:new Date().toISOString(),read:false});
@@ -617,7 +619,7 @@ function markNotificationRead(id){
 }
 
 function markAllNotificationsRead(){
-  appState.notifications.forEach(n=>n.read=true);
+  appState.notifications.forEach(n=>{ if(!n.read) n.read = true; });
   saveAppState();
   renderNotifications();
 }
@@ -652,19 +654,24 @@ function buildApplicationDetailsHtml(app){
   const coverLetterText = normalized.coverLetter || (normalized.coverLetterUsed ? 'Generated cover letter available.' : '');
   const retryLine = Number(normalized.retryCount || 0) > 0 ? `<p><strong>Retry Count:</strong> ${escapeHtml(String(normalized.retryCount))}</p>` : '';
   const reasonLine = normalized.manualActionReason || normalized.failureReason || 'No additional reason provided.';
+  const failureReasonLine = normalized.failureReason ? `<p><strong>Failure Reason:</strong> ${escapeHtml(normalized.failureReason)}</p>` : '';
+  const manualReasonLine = normalized.manualActionReason ? `<p><strong>Manual Action Reason:</strong> ${escapeHtml(normalized.manualActionReason)}</p>` : '';
+  const coverLetterUsedLine = `<p><strong>Cover Letter Used:</strong> ${escapeHtml(normalized.coverLetterUsed ? 'Yes' : 'No')}</p>`;
   return `
     <div style="display:grid;gap:12px;">
       <p><strong>Job Title:</strong> ${escapeHtml(normalized.jobTitle)}</p>
       <p><strong>Company:</strong> ${escapeHtml(normalized.company)}</p>
-      <p><strong>Match Score:</strong> ${escapeHtml(String(normalized.matchScore))}%</p>
       <p><strong>Source:</strong> ${escapeHtml(normalized.source)}</p>
-      <p><strong>Application Date & Time:</strong> ${escapeHtml(`${formatSampleDate(normalized.date)} • ${normalized.time}`)}</p>
-      <p><strong>Current Status:</strong> ${escapeHtml(normalized.status)}</p>
+      <p><strong>Match Score:</strong> ${escapeHtml(String(normalized.matchScore))}%</p>
+      <p><strong>Status:</strong> ${escapeHtml(normalized.status)}</p>
+      <p><strong>Timestamp:</strong> ${escapeHtml(`${formatSampleDate(normalized.date)} • ${normalized.time}`)}</p>
       <p><strong>Resume Used:</strong> ${escapeHtml(normalized.resumeUsed ? 'Yes' : 'No')}</p>
+      ${coverLetterUsedLine}
+      ${manualReasonLine}
+      ${failureReasonLine}
       ${coverLetterText ? `<p><strong>Cover Letter:</strong><br>${escapeHtml(coverLetterText)}</p>` : ''}
-      <p><strong>Manual Action Reason / Failure Reason:</strong> ${escapeHtml(reasonLine)}</p>
       ${retryLine}
-      <p><strong>Job URL:</strong> ${urlLine}</p>
+      <p><strong>Original Job URL:</strong> ${urlLine}</p>
     </div>
   `;
 }
@@ -2033,7 +2040,7 @@ function loadMoreApplications(){
 let appState = loadAppState();
 let allSettings = appState.workflowSettings || {};
 let profileState = appState.profile || {};
-let sampleApplications = (appState.applications || []).map(app=>normalizeApplicationRecord(app));
+let sampleApplications = Array.isArray(appState.applications) ? appState.applications : [];
 let jobsData = (appState.jobs || []).map(job=>normalizeApplicationRecord(job, job));
 let workflowState = createDefaultWorkflowState();
 if(allSettings && allSettings.workflowState && typeof allSettings.workflowState === 'object'){
@@ -2860,13 +2867,16 @@ function computeDashboardStats(){
   const jobs = (appState.jobs || []).map(job=>normalizeApplicationRecord(job, job));
   const applications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
   const matchedJobsCount = jobs.filter(j=>Boolean(j.matched)).length;
-  const trackedStatuses = ['Success','Pending Review','Manual Action Needed','Temporary Failure','Permanent Failure'];
+  const trackedStatuses = ['Success','Pending Review','Manual Action Needed','Temporary Failure','Permanent Failure','Skipped'];
   return {
     jobsFound: jobs.length,
     jobsMatched: Math.min(matchedJobsCount, jobs.length),
     applicationsSent: applications.filter(a=>trackedStatuses.includes(a.status)).length,
     pendingReviews: applications.filter(a=>['Pending Review','Manual Action Needed'].includes(a.status)).length,
     successful: applications.filter(a=>a.status==='Success').length,
+    temporaryFailures: applications.filter(a=>a.status==='Temporary Failure').length,
+    permanentFailures: applications.filter(a=>a.status==='Permanent Failure').length,
+    skipped: applications.filter(a=>a.status==='Skipped').length,
     failed: applications.filter(a=>a.status==='Temporary Failure' || a.status==='Permanent Failure').length,
   };
 }
@@ -2908,12 +2918,14 @@ function renderDashboard(){
   if(!grid) return;
   const stats = computeDashboardStats();
   const cards = [
-    {label:'Jobs Found',               value:stats.jobsFound,       icon:'📄', color:'#334155'},
-    {label:'Jobs Matched',             value:stats.jobsMatched,     icon:'🎯', color:'#7c3aed'},
-    {label:'Applications Sent',        value:stats.applicationsSent,icon:'📤', color:'#2563eb'},
-    {label:'Pending Review',          value:stats.pendingReviews,  icon:'⏳', color:'#ea580c'},
-    {label:'Successful Applications', value:stats.successful,      icon:'✅', color:'#16a34a'},
-    {label:'Failed Applications',     value:stats.failed,          icon:'❌', color:'#dc2626'},
+    {label:'Jobs Found', value:stats.jobsFound, icon:'📄', color:'#334155'},
+    {label:'Jobs Matched', value:stats.jobsMatched, icon:'🎯', color:'#7c3aed'},
+    {label:'Applications Sent', value:stats.applicationsSent, icon:'📤', color:'#2563eb'},
+    {label:'Successful Applications', value:stats.successful, icon:'✅', color:'#16a34a'},
+    {label:'Pending Review / Manual Action Needed', value:stats.pendingReviews, icon:'⏳', color:'#ea580c'},
+    {label:'Temporary Failure', value:stats.temporaryFailures, icon:'⏱', color:'#f59e0b'},
+    {label:'Permanent Failure', value:stats.permanentFailures, icon:'❌', color:'#dc2626'},
+    {label:'Skipped', value:stats.skipped, icon:'⏭', color:'#64748b'},
   ];
   grid.innerHTML = cards.map(c=>`
     <div class="dash-card">
@@ -3289,23 +3301,7 @@ if(appsTableBodyEl){
     const id = Number(btn.dataset.appId);
     const app = normalizeApplicationRecord(sampleApplications.find(a=>a.id===id));
     if(!app) return;
-    /* FIX (audit #4): guard the Apply URL link in the generic details modal
-       the same way handleOpenManualApplication/handleViewManualDetails do,
-       so an invalid or example.com URL never renders as a clickable link. */
-    const applyUrlLine = (app.applyUrl && isValidUrl(app.applyUrl) && !isExampleDomain(app.applyUrl))
-      ? `<a href="${escapeHtml(app.applyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(app.applyUrl)}</a>`
-      : 'Application URL unavailable.';
-    openModal(`${app.jobTitle} at ${app.company}`, `
-      <p><strong>Match Score:</strong> ${app.matchScore}%</p>
-      <p><strong>Status:</strong> ${escapeHtml(app.status)}</p>
-      <p><strong>Date:</strong> ${escapeHtml(`${formatSampleDate(app.date)} • ${app.time}`)}</p>
-      <p><strong>Source:</strong> ${escapeHtml(app.source)}</p>
-      <p><strong>Location:</strong> ${escapeHtml(app.location)}</p>
-      <p><strong>Employment Type:</strong> ${escapeHtml(app.employmentType)}</p>
-      <p><strong>Experience Level:</strong> ${escapeHtml(app.experienceLevel)}</p>
-      <p><strong>Apply URL:</strong> ${applyUrlLine}</p>
-      ${app.coverLetter ? `<p><strong>Cover Letter:</strong><br>${escapeHtml(app.coverLetter)}</p>` : ''}
-    `);
+    openModal(`${app.jobTitle} at ${app.company}`, buildApplicationDetailsHtml(app));
   });
 }
 
