@@ -369,8 +369,32 @@ function zoomBy(f){
 
 /* =====================================================================
    APPLICATION STATE & STORAGE
+
+   AUDIT FIX — SINGLE SOURCE OF TRUTH:
+   `sampleApplications` is the ONE canonical array of application records.
+   `appState.applications` always points at the same array (never a copy),
+   and every page (Workflow, Dashboard, Applications, Analytics,
+   Notifications) reads from it (or from computeDashboardStats(), which
+   itself reads only from this array + appState.jobs) instead of keeping
+   its own counters. There is exactly one record per job (matched by
+   jobId, enforced in persistApplication()), and exactly one notifications
+   array / one activity array, each also deduplicated on write.
    ===================================================================== */
 const APP_STORAGE_KEY = 'ajaAppState';
+const MAX_RETRY_COUNT = 3; // Temporary Failure retry limit (audit #3 / #12)
+const ALLOWED_NOTIFICATION_TITLES = new Set([
+  'Job Found',
+  'Jobs Matched',
+  'Application Submitted',
+  'Manual Action Needed',
+  'Temporary Failure',
+  'Permanent Failure',
+  'Workflow Completed'
+]);
+const ALLOWED_APPLICATION_STATUSES = new Set([
+  'Draft','Pending Review','Submitted','Success','Temporary Failure','Permanent Failure','Skipped','Manual Action Needed'
+]);
+
 const DEFAULT_APP_STATE = {
   profile: {
     firstName:'Alex',
@@ -412,17 +436,38 @@ const DEFAULT_APP_STATE = {
 };
 
 /* ---------------------------------------------------------------------
-   FIX (audit #1 — undefined values): fallbackText() is the single choke
-   point every job/application title, company, source, etc. passes
-   through before being stored or rendered. Stripping stray "undefined"/
-   "null" fragments here is a safety net that guarantees no bad string
-   concatenation anywhere in the app can ever leak "undefined" into the
-   UI, even if a future code path reintroduces a similar bug.
+   fallbackText() is the single choke point every job/application title,
+   company, source, etc. passes through before being stored or rendered.
+   Stripping stray "undefined"/"null" fragments here guarantees no bad
+   string concatenation anywhere in the app can ever leak "undefined"
+   into the UI.
    --------------------------------------------------------------------- */
 function fallbackText(value, fallback){
   let normalized = String(value ?? '').trim();
   normalized = normalized.replace(/\b(undefined|null)\b/gi, '').replace(/\s{2,}/g, ' ').trim();
   return normalized ? normalized : fallback;
+}
+
+/* ---------------------------------------------------------------------
+   AUDIT FIX #7 — "Never open localhost. Never open invalid URLs."
+   sanitizeExternalUrl() is the single choke point for every URL that
+   ends up on an application record. Demo/mock providers only ever
+   generate localhost URLs (there is no real job board integration in
+   this demo), so those are normalized to '' at the point of storage —
+   the UI can then treat "no URL" as the one and only signal for
+   Demo Mode, instead of re-deriving validity ad-hoc in multiple places.
+   --------------------------------------------------------------------- */
+function sanitizeExternalUrl(url){
+  const value = String(url || '').trim();
+  if(!value) return '';
+  let parsed;
+  try{ parsed = new URL(value); } catch(err){ return ''; }
+  if(!['http:','https:'].includes(parsed.protocol)) return '';
+  const hostname = parsed.hostname.toLowerCase();
+  const blocked = ['localhost','127.0.0.1','0.0.0.0'];
+  if(blocked.includes(hostname) || hostname.endsWith('.localhost')) return '';
+  if(hostname === 'example.com' || hostname.endsWith('.example.com')) return '';
+  return value;
 }
 
 function normalizeApplicationRecord(input = {}, fallbackJob = null){
@@ -440,9 +485,10 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
   const timeValue = fallbackText(source.time || source.createdTime || (source.dateTime && String(source.dateTime).split(' ').slice(1).join(' ') || ''), parsedDate && !Number.isNaN(parsedDate) ? parsedDate.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}) : new Date().toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}));
   const dateTimeValue = fallbackText(source.dateTime || `${dateValue} ${timeValue}`, `${dateValue} ${timeValue}`);
   const matchScoreValue = Number.isFinite(Number(source.matchScore ?? fallback.matchScore ?? 0)) ? Number(source.matchScore ?? fallback.matchScore ?? 0) : 0;
-  const statusValue = fallbackText(source.status || fallback.status || 'Pending Review', 'Pending Review');
-  const applicationUrlValue = fallbackText(source.applicationUrl || source.applyUrl || source.url || fallback.applicationUrl || fallback.applyUrl || fallback.url || '', '');
-  const applyUrlValue = fallbackText(source.applyUrl || source.applicationUrl || source.url || fallback.applyUrl || fallback.applicationUrl || fallback.url || '', '');
+  let statusValue = fallbackText(source.status || fallback.status || 'Pending Review', 'Pending Review');
+  if(!ALLOWED_APPLICATION_STATUSES.has(statusValue)) statusValue = 'Pending Review'; // AUDIT #12: repair invalid status
+  const applicationUrlValue = sanitizeExternalUrl(source.applicationUrl || source.applyUrl || source.url || fallback.applicationUrl || fallback.applyUrl || fallback.url || '');
+  const applyUrlValue = sanitizeExternalUrl(source.applyUrl || source.applicationUrl || source.url || fallback.applyUrl || fallback.applicationUrl || fallback.url || '');
   const resumeUsedValue = Boolean(source.resumeUsed ?? source.resumeUploaded ?? source.resumeDataUrl ?? fallback.resumeUploaded ?? fallback.resumeDataUrl ?? source.resumeFileName ?? fallback.resumeFileName);
   const coverLetterUsedValue = Boolean(source.coverLetterUsed ?? source.coverLetter ?? source.autoCover ?? fallback.coverLetter ?? fallback.autoCover ?? source.coverLetterText ?? fallback.coverLetterText);
   const manualActionReasonValue = String(source.manualActionReason ?? fallback.manualActionReason ?? '').trim();
@@ -452,6 +498,7 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
   const workflowIdValue = fallbackText(source.workflowId || fallback.workflowId, 'workflow-default');
   const createdAtValue = source.createdAt || fallback.createdAt || new Date().toISOString();
   const completedAtValue = source.completedAt || fallback.completedAt || '';
+  const retryCountValue = Math.max(0, Number(source.retryCount ?? fallback.retryCount ?? 0) || 0);
   const normalized = {
     ...source,
     ...fallback,
@@ -473,7 +520,8 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
     experienceLevel,
     resumeUsed: resumeUsedValue,
     coverLetterUsed: coverLetterUsedValue,
-    retryCount: Number(source.retryCount ?? fallback.retryCount ?? 0) || 0,
+    retryCount: retryCountValue,
+    retryLimit: MAX_RETRY_COUNT,
     notes: fallbackText(source.notes || fallback.notes || '', 'No notes yet.'),
     applicationId: applicationIdValue,
     workflowId: workflowIdValue,
@@ -495,6 +543,78 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null){
   if(!normalized.applicationId) normalized.applicationId = normalized.id;
   if(!normalized.workflowId) normalized.workflowId = 'workflow-default';
   return normalized;
+}
+
+/* ---------------------------------------------------------------------
+   AUDIT FIX #12 — automatic consistency check + repair.
+   Runs after every scan (and once at startup) so the five surfaces
+   (Workflow, Dashboard, Applications, Analytics, Notifications) can
+   never drift apart even if bad data was written by an older version
+   of this app or an interrupted run.
+   --------------------------------------------------------------------- */
+function runConsistencyCheck(){
+  const report = {repaired:false, notes:[]};
+
+  // 1) Exactly one application per job (dedupe by jobId, keep most-recently updated).
+  if(Array.isArray(sampleApplications) && sampleApplications.length){
+    const byJob = new Map();
+    let removedDupes = 0;
+    sampleApplications.forEach(app=>{
+      const key = app.jobId !== undefined && app.jobId !== null && app.jobId !== 0 ? `job:${app.jobId}` : `rec:${app.id}`;
+      const existing = byJob.get(key);
+      if(!existing){ byJob.set(key, app); return; }
+      const existingTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+      const currentTime = new Date(app.updatedAt || app.createdAt || 0).getTime();
+      byJob.set(key, currentTime >= existingTime ? app : existing);
+      removedDupes++;
+    });
+    if(removedDupes > 0){
+      sampleApplications = Array.from(byJob.values());
+      report.repaired = true;
+      report.notes.push(`Removed ${removedDupes} duplicate application record(s).`);
+    }
+  }
+
+  // 2) Every application has exactly one valid final status + sanitized URLs (defensive re-normalize).
+  sampleApplications = sampleApplications.map(app=>normalizeApplicationRecord(app));
+
+  // 3) Notifications: no duplicates (same title + message), keep newest-first order.
+  if(Array.isArray(appState.notifications) && appState.notifications.length){
+    const seen = new Set();
+    const deduped = [];
+    appState.notifications.forEach(n=>{
+      if(!n) return;
+      const key = `${n.title}::${n.message}`;
+      if(seen.has(key)) return;
+      seen.add(key);
+      deduped.push(n);
+    });
+    if(deduped.length !== appState.notifications.length){
+      appState.notifications = deduped;
+      report.repaired = true;
+      report.notes.push('Removed duplicate notification(s).');
+    }
+  }
+
+  // 4) Workflow queue: no duplicate jobIds, no already-completed entries re-queued.
+  if(workflowState && Array.isArray(workflowState.queue) && workflowState.queue.length){
+    const seenJobIds = new Set();
+    const dedupedQueue = [];
+    workflowState.queue.forEach(entry=>{
+      if(!entry || seenJobIds.has(entry.jobId)) return;
+      seenJobIds.add(entry.jobId);
+      dedupedQueue.push(entry);
+    });
+    if(dedupedQueue.length !== workflowState.queue.length){
+      workflowState.queue = dedupedQueue;
+      report.repaired = true;
+      report.notes.push('Removed duplicate workflow queue entries.');
+    }
+  }
+
+  appState.applications = sampleApplications;
+  if(report.repaired) saveAppState();
+  return report;
 }
 
 function loadAppState(){
@@ -541,8 +661,8 @@ function saveAppState(){
     allSettings.workflowState = workflowState || createDefaultWorkflowState();
   }
   appState.jobs = (jobsData || []).map(job=>normalizeApplicationRecord(job, job));
-  appState.applications = ((Array.isArray(sampleApplications) ? sampleApplications : []) || []).map(app=>normalizeApplicationRecord(app));
-  sampleApplications = appState.applications;
+  appState.applications = (Array.isArray(sampleApplications) ? sampleApplications : []).map(app=>normalizeApplicationRecord(app));
+  sampleApplications = appState.applications; // single source of truth: same array reference everywhere
   if(!appState.notifications) appState.notifications = [];
   if(!appState.activity) appState.activity = [];
   localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState));
@@ -555,10 +675,14 @@ function addActivity(message){
   syncWorkflowUi();
 }
 
+/* AUDIT FIX #8 — only the seven allowed notification titles may be raised,
+   and addNotification is the single choke point that guarantees no exact
+   duplicate (same title + message) is ever stored twice. */
 function addNotification(title,message){
   const normalizedTitle = String(title || '').trim();
   const normalizedMessage = String(message || '').trim();
   if(!normalizedTitle || !normalizedMessage) return;
+  if(!ALLOWED_NOTIFICATION_TITLES.has(normalizedTitle)) return; // reject anything outside the allowed event list
   const duplicate = appState.notifications.some(note => note.title === normalizedTitle && note.message === normalizedMessage);
   if(duplicate) return;
   appState.notifications.unshift({id:Date.now(),title:normalizedTitle,message:normalizedMessage,date:new Date().toISOString(),read:false});
@@ -609,6 +733,7 @@ function toggleNotificationsPanel(forceOpen){
   if(isOpen){ renderNotifications(); }
 }
 
+/* AUDIT FIX #8 — "Mark all read → marks unread only... Never modify application data." */
 function markNotificationRead(id){
   const note = appState.notifications.find(n=>n.id===id);
   if(note && !note.read){
@@ -631,18 +756,12 @@ function clearNotifications(){
   showToast('Notifications cleared.');
 }
 
+/* AUDIT FIX #7 — the ONLY place that decides whether an application link
+   can be opened. Since applicationUrl/applyUrl are already sanitized at
+   write-time via sanitizeExternalUrl(), an empty string is the single
+   signal for "Demo Mode". */
 function isOpenableApplicationUrl(url){
-  const value = String(url || '').trim();
-  if(!value || !isValidUrl(value)) return false;
-  try{
-    const parsed = new URL(value);
-    const hostname = parsed.hostname.toLowerCase();
-    if(!['http:','https:'].includes(parsed.protocol)) return false;
-    if(hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === 'example.com' || hostname.endsWith('.example.com')) return false;
-    return true;
-  } catch(err){
-    return false;
-  }
+  return sanitizeExternalUrl(url) !== '';
 }
 
 function buildApplicationDetailsHtml(app){
@@ -650,13 +769,13 @@ function buildApplicationDetailsHtml(app){
   const displayUrl = normalized.applicationUrl || normalized.applyUrl || '';
   const urlLine = isOpenableApplicationUrl(displayUrl)
     ? `<a href="${escapeHtml(displayUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(displayUrl)}</a>`
-    : 'Not available';
-  const coverLetterText = normalized.coverLetter || (normalized.coverLetterUsed ? 'Generated cover letter available.' : '');
-  const retryLine = Number(normalized.retryCount || 0) > 0 ? `<p><strong>Retry Count:</strong> ${escapeHtml(String(normalized.retryCount))}</p>` : '';
+    : 'Demo Mode: No external job URL available.';
+  const coverLetterText = normalized.coverLetter || (normalized.coverLetterUsed ? 'Generated cover letter available.' : 'Not generated.');
   const reasonLine = normalized.manualActionReason || normalized.failureReason || 'No additional reason provided.';
-  const failureReasonLine = normalized.failureReason ? `<p><strong>Failure Reason:</strong> ${escapeHtml(normalized.failureReason)}</p>` : '';
-  const manualReasonLine = normalized.manualActionReason ? `<p><strong>Manual Action Reason:</strong> ${escapeHtml(normalized.manualActionReason)}</p>` : '';
+  const failureReasonLine = `<p><strong>Failure Reason:</strong> ${escapeHtml(normalized.failureReason || 'N/A')}</p>`;
+  const manualReasonLine = `<p><strong>Manual Action Reason:</strong> ${escapeHtml(normalized.manualActionReason || 'N/A')}</p>`;
   const coverLetterUsedLine = `<p><strong>Cover Letter Used:</strong> ${escapeHtml(normalized.coverLetterUsed ? 'Yes' : 'No')}</p>`;
+  const retryLine = `<p><strong>Retry Count:</strong> ${escapeHtml(String(normalized.retryCount || 0))} / ${escapeHtml(String(MAX_RETRY_COUNT))}</p>`;
   return `
     <div style="display:grid;gap:12px;">
       <p><strong>Job Title:</strong> ${escapeHtml(normalized.jobTitle)}</p>
@@ -664,18 +783,19 @@ function buildApplicationDetailsHtml(app){
       <p><strong>Source:</strong> ${escapeHtml(normalized.source)}</p>
       <p><strong>Match Score:</strong> ${escapeHtml(String(normalized.matchScore))}%</p>
       <p><strong>Status:</strong> ${escapeHtml(normalized.status)}</p>
-      <p><strong>Timestamp:</strong> ${escapeHtml(`${formatSampleDate(normalized.date)} • ${normalized.time}`)}</p>
-      <p><strong>Resume Used:</strong> ${escapeHtml(normalized.resumeUsed ? 'Yes' : 'No')}</p>
+      <p><strong>Submission Time:</strong> ${escapeHtml(`${formatSampleDate(normalized.date)} • ${normalized.time}`)}</p>
+      <p><strong>Resume:</strong> ${escapeHtml(normalized.resumeUsed ? 'Used' : 'Not used')}</p>
       ${coverLetterUsedLine}
       ${manualReasonLine}
       ${failureReasonLine}
-      ${coverLetterText ? `<p><strong>Cover Letter:</strong><br>${escapeHtml(coverLetterText)}</p>` : ''}
+      <p><strong>Cover Letter:</strong><br>${escapeHtml(coverLetterText)}</p>
       ${retryLine}
       <p><strong>Original Job URL:</strong> ${urlLine}</p>
     </div>
   `;
 }
 
+/* AUDIT FIX #7 — exact required message text, never opens localhost/invalid URLs. */
 function openApplicationForRecord(app){
   const normalized = normalizeApplicationRecord(app);
   const url = String(normalized.applicationUrl || normalized.applyUrl || '').trim();
@@ -683,7 +803,7 @@ function openApplicationForRecord(app){
     window.open(url, '_blank', 'noopener,noreferrer');
     return true;
   }
-  showToast('Application link unavailable (Demo Mode).', 'info');
+  showToast('Demo Mode: No external job URL available.', 'info');
   return false;
 }
 
@@ -763,12 +883,9 @@ const jobProviderService = {
         const sources = ['LinkedIn','Indeed','Glassdoor','Monster','CareerBuilder'];
         const remoteOptions = ['Remote','Hybrid','On-site'];
         const salaryRanges = ['$70k-$90k','$80k-$105k','$90k-$120k','$100k-$130k','$110k-$150k'];
-        /* FIX (audit #1): title suffixes are kept as one fixed-length array and the
-           suffix is resolved ONCE per job, then reused for both `title` and
-           `jobTitle`. The previous version called `.filter(Boolean)` (which shrinks
-           the array from 6 items to 5) but still indexed with `Math.random()*6`,
-           so index 5 was out of bounds and produced `undefined`, which template
-           interpolation stringified into literal text: "React Developer undefined". */
+        /* title suffixes are one fixed-length array; the suffix is resolved
+           ONCE per job and reused for both `title` and `jobTitle` so an
+           out-of-range index can never stringify to "undefined". */
         const titleSuffixes = ['II','III','Lead','Senior','Junior',''];
         const count = 8 + Math.floor(Math.random()*5);
         const jobs = [];
@@ -780,8 +897,14 @@ const jobProviderService = {
           const source = sources[Math.floor(Math.random()*sources.length)];
           const salary = salaryRanges[Math.floor(Math.random()*salaryRanges.length)];
           const requiresManualAction = Math.random() < 0.12 || (source.toLowerCase().includes('monster') && Math.random() < 0.35);
-          const jobId = `provider-job-${Date.now()}-${i}`;
-          const applicationUrl = `http://localhost/apply/${encodeURIComponent(jobId)}`;
+          const jobId = `provider-job-${Date.now()}-${i}-${Math.random().toString(36).slice(2,8)}`;
+          /* NOTE: this is a demo/mock job board — it has no real external
+             application URL. We intentionally do NOT synthesize a
+             localhost URL here anymore (audit #7); sanitizeExternalUrl()
+             will blank it out at storage time regardless, but generating
+             a fake link at all previously implied "this can be opened",
+             which was misleading. */
+          const applicationUrl = '';
           const suffix = titleSuffixes[Math.floor(Math.random()*titleSuffixes.length)];
           const roleTitle = suffix ? `${role} ${suffix}` : role;
           jobs.push({
@@ -828,7 +951,8 @@ function normalizeJobFromProvider(job, context = {}){
     jobType: job.jobType || 'Full-time',
     remote,
     description: job.description || `Role at ${company}`,
-    applyUrl: job.applyUrl || '',
+    applyUrl: sanitizeExternalUrl(job.applyUrl || ''),
+    applicationUrl: sanitizeExternalUrl(job.applicationUrl || job.applyUrl || ''),
     source: job.source || 'Provider',
     postedDate: job.postedDate || new Date().toISOString().slice(0,10),
     automationPossible: job.automationPossible !== undefined ? job.automationPossible : Boolean((context.profile || {}).resumeUploaded),
@@ -845,12 +969,6 @@ function createJobProviderContext(){
     settings: getNodeSettings('n3'),
     existingJobs: jobsData || []
   };
-}
-
-function generateApplicationUrl(job){
-  const rawId = String((job && (job.id || job.jobId || job.jobTitle || job.title)) || Date.now()).trim();
-  const safeId = encodeURIComponent(rawId.replace(/\s+/g,'-').replace(/[^a-zA-Z0-9-_]/g,''));
-  return `http://localhost/apply/${safeId}`;
 }
 
 function isValidUrl(url){
@@ -875,15 +993,6 @@ const MANUAL_ACTION_REASONS = [
 function pickManualActionReason(job){
   const idx = Math.floor(Math.random() * MANUAL_ACTION_REASONS.length);
   return MANUAL_ACTION_REASONS[idx];
-}
-
-function isExampleDomain(url){
-  try{
-    const hostname = new URL(String(url).trim()).hostname.toLowerCase();
-    return hostname === 'example.com' || hostname.endsWith('.example.com');
-  } catch(e){
-    return true;
-  }
 }
 
 function findApplicationByIdOrJobId(idOrJobId){
@@ -931,7 +1040,7 @@ function resumeWorkflow(){ if(workflowState.status !== 'paused') return false; r
 function stopWorkflow(reason = 'stopped'){ return setWorkflowState('stopped', {pauseReason: reason, currentStatus:'stopped'}); }
 
 function prepareApplicationPayload(job){
-  const applicationUrl = String(job.applicationUrl || job.applyUrl || '').trim();
+  const applicationUrl = sanitizeExternalUrl(job.applicationUrl || job.applyUrl || '');
   const automationPossible = Boolean(job.automationPossible !== false && profileState.resumeUploaded);
   const manualReviewRequired = !automationPossible || !profileState.autoApply;
   return {
@@ -939,11 +1048,10 @@ function prepareApplicationPayload(job){
     applyUrl: applicationUrl,
     automationPossible,
     manualReviewRequired,
-    notes: applicationUrl ? 'Resume and cover letter prepared for automated submission.' : 'Prepared for internal submission simulation.'
+    notes: applicationUrl ? 'Resume and cover letter prepared for automated submission.' : 'Prepared for internal submission simulation (demo mode — no external job URL).'
   };
 }
 
-const WORKFLOW_SEQUENCE = ['n1','n2','n3','n4','n5','n6','d7','n8','n9','n10','n11','n12','n14','n16','n17'];
 const WORKFLOW_STATUS_COLOR = {
   completed:'#16a34a',
   pending:'#ea580c',
@@ -953,7 +1061,6 @@ const WORKFLOW_STATUS_COLOR = {
 let workflowRunning = false;
 let workflowPauseContext = null;
 let scanWaiting = false;
-let resumeAfterScanTrigger = false;
 
 function applyWorkflowNodeStyle(id, status){
   const node = nodeState[id];
@@ -1037,21 +1144,6 @@ async function executeWorkflowNode(job, id, state, status='completed', duration=
 
 function getWorkflowJobKey(job){
   return `${job.jobTitle || ''}|${job.company || ''}|${job.location || ''}`;
-}
-
-function resolveSubmissionResult(job, profileStateOverride){
-  const state = profileStateOverride || profileState || {};
-  const override = window && window.workflowDemoResultOverride;
-  if(override === 'success' || override === 'temporary_failure' || override === 'manual_action_needed' || override === 'permanent_failure') return override;
-  const autoApply = state.autoApply !== false;
-  if(!autoApply) return 'manual_action_needed';
-  const baseScore = Number(job && job.matchScore) || 0;
-  const random = Math.random();
-  if(baseScore >= 90 && random > 0.2) return 'success';
-  if(random < 0.12) return 'temporary_failure';
-  if(random < 0.2) return 'manual_action_needed';
-  if(random < 0.28) return 'permanent_failure';
-  return 'success';
 }
 
 function validateProfileForWorkflow(){
@@ -1144,15 +1236,19 @@ function applyPreferenceFilters(jobs){
   });
 }
 
-function enforceDailyLimit(jobs){
-  const limit = Number(profileState.dailyLimit) || 30;
-  return jobs.slice(0, limit);
-}
-
 function createCoverLetter(job){
   return `Dear Hiring Team,\n\nI am excited to apply for the ${job.jobTitle || job.title} role at ${job.company}. With my experience in ${normalizeArrayString(profileState.skills).join(', ')}, I am confident I can contribute to your team.\n\nBest regards,\n${profileState.firstName}`;
 }
 
+/* ---------------------------------------------------------------------
+   buildApplicationResult(): the single source of truth for the outcome
+   of one submission ATTEMPT (not the final application status — retry
+   escalation to Permanent Failure is handled one layer up, in
+   resolveSubmissionOutcome(), so the "exhausted retries -> Permanent
+   Failure" rule lives in exactly one place). Delegates to
+   WorkflowEngine.buildApplicationResult when available (workflow-engine.js)
+   so there is only one implementation of the odds/rules.
+   --------------------------------------------------------------------- */
 function buildApplicationResult(job, attemptNumber = 0, profileStateOverride, randomProvider){
   if(window.WorkflowEngine && typeof window.WorkflowEngine.buildApplicationResult === 'function'){
     return window.WorkflowEngine.buildApplicationResult(job, attemptNumber, profileStateOverride, randomProvider);
@@ -1163,56 +1259,98 @@ function buildApplicationResult(job, attemptNumber = 0, profileStateOverride, ra
   }
   const state = profileStateOverride || profileState || {};
   const autoApply = state.autoApply !== false;
-  const applicationUrl = String(job && (job.applicationUrl || job.applyUrl || job.url) || '').trim();
-  const baseScore = Number(job && job.matchScore) || 0;
   if(!autoApply) return 'Manual Action Needed';
-  if(!job) {
-    console.warn('[Submission Result] missing job data, defaulting to Temporary Failure');
-    return 'Temporary Failure';
-  }
+  if(!job) return 'Temporary Failure';
   if(!state.resumeUploaded) return 'Manual Action Needed';
+  const baseScore = Number(job && job.matchScore) || 0;
   const source = String(job.source || '').toLowerCase();
   const random = typeof randomProvider === 'function' ? randomProvider() : Math.random();
-  if(!applicationUrl || !isValidUrl(applicationUrl)){
-    console.debug(`[Submission Result] job lacks valid application URL for ${job.jobTitle || job.title} @ ${job.company}; continuing simulation.`);
-  }
-  if(job.requiresManualAction){
-    console.log('[Submission Result] Manual Action Needed by explicit job requirement', {job:job.jobTitle, company:job.company, source, requiresManualAction: job.requiresManualAction, applicationUrl});
-    return 'Manual Action Needed';
-  }
-  if(source.includes('glassdoor')){
-    console.log('[Submission Result] Permanent Failure by source rule', {job:job.jobTitle, company:job.company, source, applicationUrl});
-    return 'Permanent Failure';
-  }
-  if(source.includes('indeed') && attemptNumber > 0){
-    console.log('[Submission Result] Temporary Failure by Indeed retry rule', {job:job.jobTitle, company:job.company, source, attemptNumber, applicationUrl});
-    return 'Temporary Failure';
-  }
+
+  if(job.requiresManualAction) return 'Manual Action Needed';
+  if(source.includes('glassdoor')) return 'Permanent Failure';
+  if(source.includes('indeed') && attemptNumber > 0) return 'Temporary Failure';
 
   const threshold = Number(state.minMatchScore || 75);
   if(baseScore >= threshold){
-    if(random < 0.55){
-      console.log('[Submission Result] Success by score', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
-      return 'Success';
-    }
-    if(random < 0.80){
-      console.log('[Submission Result] Temporary Failure by score logic', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
-      return 'Temporary Failure';
-    }
-    console.log('[Submission Result] Permanent Failure by score logic', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
+    if(random < 0.55) return 'Success';
+    if(random < 0.80) return 'Temporary Failure';
     return 'Permanent Failure';
   }
-
-  if(random < 0.20){
-    console.log('[Submission Result] Success by fallback chance', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
-    return 'Success';
-  }
-  if(random < 0.65){
-    console.log('[Submission Result] Temporary Failure by fallback chance', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
-    return 'Temporary Failure';
-  }
-  console.log('[Submission Result] Permanent Failure by fallback chance', {job:job.jobTitle, company:job.company, source, baseScore, attemptNumber, random, applicationUrl});
+  if(random < 0.20) return 'Success';
+  if(random < 0.65) return 'Temporary Failure';
   return 'Permanent Failure';
+}
+
+/* ---------------------------------------------------------------------
+   AUDIT FIX #3 / #12 — "Retry until retry limit. If retry succeeds →
+   Success. If retries exhausted → Permanent Failure." This is the ONE
+   place that owns the retry-limit rule; both the automatic in-scan retry
+   and the manual "Retry" button call through here so the rule can never
+   diverge between the two call sites.
+   --------------------------------------------------------------------- */
+function resolveSubmissionOutcome(job, currentRetryCount, profileStateOverride){
+  const outcome = buildApplicationResult(job, currentRetryCount, profileStateOverride);
+  const normalized = String(outcome || '').toLowerCase().replace(/ /g,'_');
+  if(normalized === 'temporary_failure' && currentRetryCount + 1 >= MAX_RETRY_COUNT){
+    return {outcome:'Permanent Failure', retryExhausted:true};
+  }
+  return {outcome: outcome, retryExhausted:false};
+}
+
+/* ---------------------------------------------------------------------
+   AUDIT FIX — single choke point that writes an application's final
+   outcome to storage, updates dashboard/analytics/notifications and
+   advances workflow node highlighting. Used by every code path that can
+   resolve a job (initial run, manual review resume, retry, mark
+   completed/failed) so "each event -> exactly one notification, exactly
+   one stored record" can never diverge between call sites.
+   --------------------------------------------------------------------- */
+async function applyOutcomeToApplication(job, outcome, opts = {}){
+  const normalized = String(outcome || '').toLowerCase().replace(/ /g,'_');
+  applySubmissionResultVisuals(normalized);
+  let finalStatus = 'Pending Review';
+  let extra = {};
+  switch(normalized){
+    case 'success':
+      finalStatus = 'Success';
+      job.workflowStatus = 'Success';
+      job.workflowFinalStatus = 'success';
+      extra = {confirmationMessage:'Application submitted successfully.', submittedAt:new Date().toISOString(), failureReason:'', manualActionReason:'', ...opts.extra};
+      persistApplication(job, finalStatus, extra);
+      addActivity(`Application succeeded for ${job.jobTitle || job.title} at ${job.company}.`);
+      addNotification('Application Submitted', `${job.jobTitle || job.title} at ${job.company} was submitted successfully.`);
+      break;
+    case 'temporary_failure':
+      finalStatus = 'Temporary Failure';
+      job.workflowStatus = 'Temporary Failure';
+      job.workflowFinalStatus = 'temporary_failure';
+      extra = {failureReason:'Temporary failure during submission.', retryCount:(opts.retryCount ?? job.retryCount ?? 0), nextRetryAt:new Date().toISOString(), ...opts.extra};
+      persistApplication(job, finalStatus, extra);
+      addActivity(`Application temporarily failed for ${job.jobTitle || job.title} at ${job.company}.`);
+      addNotification('Temporary Failure', `${job.jobTitle || job.title} at ${job.company} needs another attempt.`);
+      break;
+    case 'manual_action_needed':
+      finalStatus = 'Manual Action Needed';
+      job.workflowStatus = 'Manual Action Needed';
+      job.workflowFinalStatus = 'manual_action_needed';
+      extra = {manualReviewRequired:true, failureReason:'Manual action required.', manualActionReason: pickManualActionReason(job), ...opts.extra};
+      persistApplication(job, finalStatus, extra);
+      addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
+      addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
+      break;
+    case 'permanent_failure':
+      finalStatus = 'Permanent Failure';
+      job.workflowStatus = 'Permanent Failure';
+      job.workflowFinalStatus = 'permanent_failure';
+      extra = {failureReason: opts.failureReason || 'Permanent failure during submission.', manualActionReason:'', ...opts.extra};
+      persistApplication(job, finalStatus, extra);
+      addActivity(`Application permanently failed for ${job.jobTitle || job.title} at ${job.company}.`);
+      addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted. No further retries will be attempted.`);
+      break;
+    default:
+      throw new Error('Unknown submission result: ' + outcome);
+  }
+  return {status: finalStatus, normalized};
 }
 
 function syncApplicationViews(){
@@ -1235,8 +1373,8 @@ async function highlightNode(id, status='completed', duration=750){
 
 function createApplicationRecord(job, status, extra = {}){
   const nextId = appState.settings.nextApplicationId || DEFAULT_APP_STATE.settings.nextApplicationId;
-  const applicationUrl = String(extra.applicationUrl || extra.applyUrl || job.applicationUrl || job.applyUrl || generateApplicationUrl(job)).trim();
-  const applyUrl = String(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || applicationUrl).trim();
+  const applicationUrl = sanitizeExternalUrl(extra.applicationUrl || extra.applyUrl || job.applicationUrl || job.applyUrl || '');
+  const applyUrl = sanitizeExternalUrl(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || applicationUrl);
   const application = normalizeApplicationRecord({
     id: nextId,
     applicationId: nextId,
@@ -1262,11 +1400,17 @@ function createApplicationRecord(job, status, extra = {}){
   return application;
 }
 
+/* AUDIT FIX #1/#11 — persistApplication() is the ONLY function allowed to
+   write to sampleApplications. It always matches on jobId first (falling
+   back to the title+company+location+source composite key for legacy
+   records), guaranteeing exactly one record per job — never a duplicate
+   row, no matter how many times a job passes back through the pipeline
+   (retry, resume, mark completed/failed all funnel through here). */
 function persistApplication(job, status, extra = {}){
   const existing = sampleApplications.find(app => app.jobId === job.id || (app.jobTitle === (job.jobTitle || job.title) && app.company === job.company && app.location === job.location && app.source === job.source));
   const application = existing || createApplicationRecord(job, status, extra);
-  const applicationUrl = String(extra.applicationUrl || extra.applyUrl || job.applicationUrl || job.applyUrl || application.applicationUrl || generateApplicationUrl(job)).trim();
-  const applyUrl = String(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || application.applyUrl || applicationUrl).trim();
+  const applicationUrl = sanitizeExternalUrl(extra.applicationUrl || extra.applyUrl || job.applicationUrl || job.applyUrl || application.applicationUrl || '');
+  const applyUrl = sanitizeExternalUrl(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || application.applyUrl || applicationUrl);
   const normalized = normalizeApplicationRecord({
     ...application,
     jobId: job.id,
@@ -1282,7 +1426,7 @@ function persistApplication(job, status, extra = {}){
     coverLetter: extra.coverLetter !== undefined ? extra.coverLetter : (application.coverLetter || (profileState.autoCover ? createCoverLetter(job) : '')),
     manualReviewRequired: extra.manualReviewRequired !== undefined ? extra.manualReviewRequired : Boolean(application.manualReviewRequired),
     skipReason: extra.skipReason || application.skipReason || '',
-    failureReason: extra.failureReason || application.failureReason || '',
+    failureReason: extra.failureReason !== undefined ? extra.failureReason : (application.failureReason || ''),
     retryCount: extra.retryCount !== undefined ? extra.retryCount : (application.retryCount || 0),
     nextRetryAt: extra.nextRetryAt || application.nextRetryAt || '',
     confirmationMessage: extra.confirmationMessage || application.confirmationMessage || '',
@@ -1313,25 +1457,122 @@ function findQueueEntryByJobId(jobId){
   return Array.isArray(workflowState.queue) ? workflowState.queue.find(entry => entry.jobId === jobId) : undefined;
 }
 
-async function processRemainingWorkflowQueue(afterJobId){
-  const queue = Array.isArray(workflowState.queue) ? workflowState.queue : [];
-  const startIndex = queue.findIndex(entry => entry.jobId === afterJobId);
-  if(startIndex === -1) return;
-  const existingJobKeys = new Set(sampleApplications.map(a=>`${a.jobTitle}|${a.company}|${a.location}`));
-  const blacklistedCompanies = new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v=>v.toLowerCase()));
-  const dailyLimit = Number(profileState.dailyLimit) || 30;
-  let applicationsCount = 0;
-  let completedJobs = 0;
-  let waitingForNextScan = false;
+/* =====================================================================
+   UNIFIED WORKFLOW PIPELINE (AUDIT FIX #2 / #11 / "Do NOT duplicate code")
 
-  for(let index = startIndex + 1; index < queue.length; index += 1){
-    const queueEntry = queue[index];
-    if(!queueEntry) continue;
-    const job = (appState.jobs || []).find(entry => entry.id === queueEntry.jobId) || (appState.jobs || []).find(entry => entry.workflowJobKey === queueEntry.workflowJobKey);
-    if(!job) continue;
-    if(queueEntry.status === 'completed'){
-      completedJobs += 1;
-      continue;
+   Every job — whether processed in the initial run or after resuming
+   from a pause — passes through this ONE pipeline function exactly once.
+   Previously the initial-run loop and the "resume after pause" loop were
+   two independently-maintained copies of the same per-job logic, which
+   had already drifted apart (the resume loop silently skipped the
+   preference-filter node). Consolidating them here removes the
+   duplication and guarantees identical behaviour regardless of entry
+   point, which is what makes "never execute a step twice" and "never
+   create duplicate application records" actually hold.
+   ===================================================================== */
+async function runJobPipeline(job, queueEntry, ctx){
+  const jobKey = getWorkflowJobKey(job);
+
+  // Preference filter (n8)
+  await executeWorkflowNode(job, 'n8', 'filtering', 'completed');
+  const preferencePass = applyPreferenceFilters([job]).length > 0;
+  if(!preferencePass){
+    job.workflowStatus = 'Skipped';
+    job.workflowFinalStatus = 'skipped';
+    persistApplication(job, 'Skipped', {skipReason:'Job did not match preferences', notes:'Skipped because the job did not match the configured preferences.'});
+    addActivity(`Skipped ${job.jobTitle || job.title} at ${job.company} (preferences did not match).`);
+    await executeWorkflowNode(job, 'n9', 'skipped', 'skipped');
+    await executeWorkflowNode(job, 'skip', 'skipped', 'completed');
+    await executeWorkflowNode(job, 'n18', 'completed', 'completed');
+    return {status:'skipped', counted:false};
+  }
+
+  // Blacklist + duplicate check (n9)
+  const isAlreadyApplied = ctx.existingJobKeys.has(jobKey);
+  const isBlacklisted = ctx.blacklistedCompanies.has(String(job.company || '').toLowerCase());
+  await executeWorkflowNode(job, 'n9', 'checking_duplicates', (isAlreadyApplied || isBlacklisted) ? 'skipped' : 'completed');
+  if(isAlreadyApplied || isBlacklisted){
+    job.workflowStatus = 'Skipped';
+    job.workflowFinalStatus = 'skipped';
+    persistApplication(job, 'Skipped', {skipReason: isBlacklisted ? 'Blacklisted company' : 'Already applied', notes:'Skipped because the company is blacklisted or the job was already applied to.'});
+    addActivity(`Skipped ${job.jobTitle || job.title} at ${job.company} (${isBlacklisted ? 'blacklisted company' : 'already applied'}).`);
+    markWorkflowNodesSkipped(['d15','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
+    await executeWorkflowNode(job, 'skip', 'skipped', 'completed');
+    await executeWorkflowNode(job, 'n18', 'completed', 'completed');
+    return {status:'skipped', counted:false};
+  }
+
+  // Daily limit (n10) — visual only; the actual gate is checked by the caller before entering the pipeline.
+  await executeWorkflowNode(job, 'n10', 'checking_limits', 'completed');
+
+  // Cover letter + prepare application (n11, n12)
+  await executeWorkflowNode(job, 'n11', 'preparing', 'completed');
+  await executeWorkflowNode(job, 'n12', 'preparing', 'completed');
+  const automationInfo = prepareApplicationPayload(job);
+
+  // Manual review decision (d13)
+  const manualReviewRequired = automationInfo.manualReviewRequired || !profileState.autoApply;
+  if(manualReviewRequired){
+    job.workflowStatus = 'Pending Review';
+    job.workflowFinalStatus = 'pending_review';
+    setJobExecutionState(job, 'pending_review');
+    await executeWorkflowNode(job, 'd13', 'pending_review', 'completed');
+    markWorkflowNodesSkipped(['n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
+    const application = persistApplication(job, 'Pending Review', {manualReviewRequired:true, coverLetter: profileState.autoCover ? createCoverLetter(job) : '', notes: automationInfo.notes});
+    workflowPauseContext = {jobId: job.id, appId: application.id};
+    addActivity(`Workflow paused for ${job.jobTitle || job.title} at ${job.company}.`);
+    await executeWorkflowNode(job, 'pending', 'pending_review', 'pending');
+    return {status:'paused_manual_review', appId: application.id};
+  }
+
+  // Apply + submission result (n14, d15)
+  await executeWorkflowNode(job, 'd13', 'applying', 'skipped');
+  await executeWorkflowNode(job, 'n14', 'applying', 'completed');
+  await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
+
+  const currentRetryCount = job.retryCount || 0;
+  const resolved = resolveSubmissionOutcome(job, currentRetryCount, profileState);
+  const result = await applyOutcomeToApplication(job, resolved.outcome, {
+    retryCount: resolved.retryExhausted ? currentRetryCount : currentRetryCount + (String(resolved.outcome).toLowerCase().includes('temporary') ? 1 : 0),
+    failureReason: resolved.retryExhausted ? `Retry limit (${MAX_RETRY_COUNT}) exhausted.` : undefined,
+    extra: {notes: automationInfo.notes}
+  });
+  job.retryCount = (job.retryCount || 0) + (result.normalized === 'temporary_failure' ? 1 : 0);
+
+  if(result.normalized === 'manual_action_needed'){
+    workflowPauseContext = {jobId: job.id, appId: (findApplicationByIdOrJobId(job.id) || {}).id};
+    return {status:'paused_manual_action', jobId: job.id};
+  }
+
+  await executeWorkflowNode(job, 'n16', 'completed', 'completed');
+  await executeWorkflowNode(job, 'n17', 'completed', 'completed');
+  await executeWorkflowNode(job, 'n18', 'completed', 'completed');
+  const counted = ['success','temporary_failure','permanent_failure'].includes(result.normalized);
+  return {status: result.normalized, counted};
+}
+
+/* Drives the queue from `startIndex` onward, delegating each job to
+   runJobPipeline(). Stops (and returns paused:true) the moment a job
+   requires manual review/action or the daily limit is hit — the caller
+   is responsible for resuming from where this left off, never restarting
+   from the beginning (audit #11: "never process the same job twice"). */
+async function runQueueLoop(startIndex, ctx){
+  const queue = workflowState.queue || [];
+  for(let i = startIndex; i < queue.length; i++){
+    const queueEntry = queue[i];
+    if(!queueEntry || queueEntry.status === 'completed') continue;
+
+    const job = (appState.jobs || []).find(entry => entry.id === queueEntry.jobId);
+    if(!job){ queueEntry.status = 'completed'; continue; }
+
+    if(ctx.applicationsCount >= ctx.dailyLimit){
+      markWorkflowNodesSkipped(['n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','pending','skip']);
+      await executeWorkflowNode(job, 'n19', 'pending', 'pending');
+      workflowState.pauseReason = 'daily_limit';
+      workflowState.currentStatus = 'paused';
+      workflowState.currentJobId = job.id;
+      saveAppState();
+      return {paused:true, reason:'daily_limit'};
     }
 
     queueEntry.status = 'processing';
@@ -1340,161 +1581,80 @@ async function processRemainingWorkflowQueue(afterJobId){
     workflowState.pauseReason = '';
     saveAppState();
 
-    const jobKey = `${job.jobTitle || job.title}|${job.company}|${job.location}`;
-    const isAlreadyApplied = existingJobKeys.has(jobKey);
-    const isBlacklisted = blacklistedCompanies.has(String(job.company || '').toLowerCase());
+    const result = await runJobPipeline(job, queueEntry, ctx);
 
-    await executeWorkflowNode(job, 'n10', 'checking_limits', (isAlreadyApplied || isBlacklisted) ? 'skipped' : 'completed');
-    if(isAlreadyApplied || isBlacklisted){
-      job.workflowStatus = 'Skipped';
-      job.workflowFinalStatus = 'skipped';
-      persistApplication(job, 'Skipped', {skipReason: isBlacklisted ? 'Blacklisted company' : 'Already applied', notes: 'Skipped because the company is blacklisted or already applied.'});
-      queueEntry.status = 'completed';
-      workflowState.currentStatus = 'completed';
-      saveAppState();
-      markWorkflowNodesSkipped(['d15','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
-      await executeWorkflowNode(job, 'skip', 'skipped', 'completed');
-      await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-      completedJobs += 1;
-      continue;
-    }
-
-    await executeWorkflowNode(job, 'n11', 'preparing', 'completed');
-    await executeWorkflowNode(job, 'n12', 'preparing', 'completed');
-
-    const automationInfo = prepareApplicationPayload(job);
-    const manualReviewRequired = automationInfo.manualReviewRequired || !profileState.autoApply;
-    if(manualReviewRequired){
-      job.workflowStatus = 'Pending Review';
-      job.workflowFinalStatus = 'pending_review';
-      setJobExecutionState(job, 'pending_review');
-      await executeWorkflowNode(job, 'd13', 'pending_review', 'completed');
-      markWorkflowNodesSkipped(['n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
-      const application = persistApplication(job, 'Pending Review', {manualReviewRequired:true, coverLetter: profileState.autoCover ? createCoverLetter(job) : '', notes: automationInfo.notes});
+    if(result.status === 'paused_manual_review' || result.status === 'paused_manual_action'){
       queueEntry.status = 'waiting_manual_review';
       workflowState.pauseReason = 'manual_review';
       workflowState.currentStatus = 'paused';
-      workflowState.currentJobId = job.id;
-      workflowPauseContext = {jobId: job.id, appId: application.id};
-      addActivity(`Workflow paused for ${job.jobTitle || job.title} at ${job.company}.`);
-      addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
-      await executeWorkflowNode(job, 'pending', 'pending_review', 'pending');
-      workflowRunning = false;
-      setWorkflowState('paused', {pauseReason:'manual_review'});
-      if(document.querySelector('[data-action="run-workflow"]')){
-        const btn = document.querySelector('[data-action="run-workflow"]');
-        btn.disabled = false; btn.textContent = 'Run Workflow';
-      }
       saveAppState();
-      return;
+      return {paused:true, reason:'manual_review', jobId: job.id};
     }
 
-    await executeWorkflowNode(job, 'd13', 'applying', 'skipped');
-    await executeWorkflowNode(job, 'n14', 'applying', 'completed');
-    await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
-
-    let outcome = null;
-    for(let attempt=0; attempt < 2; attempt += 1){
-      outcome = buildApplicationResult(job, attempt, profileState);
-      if(outcome === 'Temporary Failure' || outcome === 'temporary_failure'){
-        job.retryCount = (job.retryCount || 0) + 1;
-        if(attempt === 0){
-          continue;
-        }
-      }
-      break;
-    }
-    if(outcome === 'Temporary Failure' || outcome === 'temporary_failure'){
-      outcome = 'Temporary Failure';
-    }
-    const submissionResult = outcome;
-    applySubmissionResultVisuals(submissionResult.toLowerCase().replace(/ /g, '_'));
-
-    switch(submissionResult){
-      case 'Success':
-      case 'success':
-        job.workflowStatus = 'Success';
-        job.workflowFinalStatus = 'success';
-        persistApplication(job, 'Success', {confirmationMessage:'Application submitted successfully.', submittedAt:new Date().toISOString(), notes: automationInfo.notes, retryCount:(job.retryCount || 0)});
-        addActivity(`Application succeeded for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Application Submitted', `${job.jobTitle || job.title} at ${job.company} was submitted successfully.`);
-        await executeWorkflowNode(job, 'n16', 'completed', 'completed');
-        await executeWorkflowNode(job, 'n17', 'completed', 'completed');
-        applicationsCount += 1;
-        existingJobKeys.add(jobKey);
-        await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-        completedJobs += 1;
-        break;
-      case 'Temporary Failure':
-      case 'temporary_failure':
-        job.workflowStatus = 'Temporary Failure';
-        job.workflowFinalStatus = 'temporary_failure';
-        persistApplication(job, 'Temporary Failure', {failureReason:'Temporary failure during submission.', retryCount:(job.retryCount || 0) + 1, nextRetryAt:new Date().toISOString(), notes:'Temporary failure; another attempt will be scheduled.'});
-        addActivity(`Application temporarily failed for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Temporary Failure', `${job.jobTitle || job.title} at ${job.company} needs another attempt.`);
-        await executeWorkflowNode(job, 'n16', 'completed', 'completed');
-        await executeWorkflowNode(job, 'n17', 'completed', 'completed');
-        applicationsCount += 1;
-        existingJobKeys.add(jobKey);
-        await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-        completedJobs += 1;
-        break;
-      case 'Manual Action Needed':
-      case 'manual_action_needed':
-        job.workflowStatus = 'Manual Action Needed';
-        job.workflowFinalStatus = 'manual_action_needed';
-        const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'The application could not be submitted automatically.', manualActionReason: pickManualActionReason(job)});
-        workflowPauseContext = {jobId: job.id, appId: manualApp.id};
-        addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
-        await executeWorkflowNode(job, 'pending', 'manual_action_needed', 'pending');
-        workflowRunning = false;
-        setWorkflowState('paused', {pauseReason:'manual_review'});
-        if(document.querySelector('[data-action="run-workflow"]')){
-          const btn = document.querySelector('[data-action="run-workflow"]');
-          btn.disabled = false; btn.textContent = 'Run Workflow';
-        }
-        saveAppState();
-        return;
-      case 'Permanent Failure':
-      case 'permanent_failure':
-        job.workflowStatus = 'Permanent Failure';
-        job.workflowFinalStatus = 'permanent_failure';
-        persistApplication(job, 'Permanent Failure', {failureReason:'Permanent failure during submission.', notes:'The application could not be submitted due to a permanent issue.'});
-        addActivity(`Application permanently failed for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted. No further retries will be attempted.`);
-        await executeWorkflowNode(job, 'n16', 'completed', 'completed');
-        await executeWorkflowNode(job, 'n17', 'completed', 'completed');
-        applicationsCount += 1;
-        existingJobKeys.add(jobKey);
-        await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-        completedJobs += 1;
-        break;
-      default:
-        throw new Error('Unknown submission result');
-    }
     queueEntry.status = 'completed';
+    ctx.completedJobs += 1;
+    if(result.counted){
+      ctx.applicationsCount += 1;
+      ctx.existingJobKeys.add(getWorkflowJobKey(job));
+    }
     saveAppState();
   }
+  return {paused:false};
+}
 
-  if(completedJobs >= queue.length && !waitingForNextScan){
+/* AUDIT FIX #10 — single finisher for a scan cycle: shows the exact
+   "Workflow Completed" summary, enters the Waiting-For-Next-Scan state,
+   and runs the automatic consistency check (#12) before the final
+   render, regardless of whether the scan ended because the queue was
+   exhausted or because the daily limit was hit. */
+async function completeScanCycle(pauseInfo){
+  const stats = computeDashboardStats();
+  const summary = `Jobs Found: ${stats.jobsFound} • Jobs Matched: ${stats.jobsMatched} • Applications Sent: ${stats.applicationsSent} • Success: ${stats.successful} • Manual Action: ${stats.pendingReviews} • Failures: ${stats.temporaryFailures + stats.permanentFailures}`;
+
+  if(!pauseInfo || !pauseInfo.paused || pauseInfo.reason === 'daily_limit'){
     await executeWorkflowNode(null, 'n19', 'pending', 'pending');
-    addActivity('All current jobs processed. Waiting for the next scan.');
-    addNotification('Workflow Completed', 'All jobs were processed. The workflow is awaiting the next scan.');
-    waitingForNextScan = true;
+    addActivity(`Workflow completed. ${summary}`);
+    addNotification('Workflow Completed', summary);
     scanWaiting = true;
     workflowState.currentStatus = 'completed';
-    workflowState.pauseReason = 'completed';
-    saveAppState();
+    workflowState.pauseReason = pauseInfo && pauseInfo.reason === 'daily_limit' ? 'daily_limit' : 'next_scan';
+    setWorkflowState('paused', {pauseReason: workflowState.pauseReason});
   }
 
+  const check = runConsistencyCheck();
   renderNotifications();
+  syncApplicationViews();
   workflowRunning = false;
-  setWorkflowState(waitingForNextScan ? 'paused' : 'completed', waitingForNextScan ? {pauseReason:'next_scan'} : {});
-  if(document.querySelector('[data-action="run-workflow"]')){
-    const btn = document.querySelector('[data-action="run-workflow"]');
-    btn.disabled = false; btn.textContent = 'Run Workflow';
+  const runBtn = document.querySelector('[data-action="run-workflow"]');
+  if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+  showToast('Workflow completed. Waiting for next scan.', 'info');
+  return {stats, check};
+}
+
+async function processRemainingWorkflowQueue(afterJobId){
+  const queue = Array.isArray(workflowState.queue) ? workflowState.queue : [];
+  const startIndex = queue.findIndex(entry => entry.jobId === afterJobId);
+  if(startIndex === -1) return;
+
+  const ctx = {
+    existingJobKeys: new Set(sampleApplications.filter(a=>a.status!=='Skipped').map(a=>`${a.jobTitle}|${a.company}|${a.location}`)),
+    blacklistedCompanies: new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v=>v.toLowerCase())),
+    dailyLimit: Number(profileState.dailyLimit) || 30,
+    applicationsCount: sampleApplications.filter(a=>['Success','Temporary Failure','Permanent Failure'].includes(a.status)).length,
+    completedJobs: 0
+  };
+
+  const result = await runQueueLoop(startIndex + 1, ctx);
+  if(result.paused){
+    workflowRunning = false;
+    const runBtn = document.querySelector('[data-action="run-workflow"]');
+    if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+    if(result.reason === 'manual_review'){
+      showToast('Workflow paused for manual action.', 'warning');
+      return;
+    }
   }
+  await completeScanCycle(result);
 }
 
 async function resumeApprovalWorkflow(app, decision = 'approve'){
@@ -1543,103 +1703,60 @@ async function resumeApprovalWorkflow(app, decision = 'approve'){
   await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
 
   const automationInfo = prepareApplicationPayload(job);
-  const resumeState = {
-    ...profileState,
-    autoApply: true,
-    resumeUploaded: true
-  };
-  const submissionResult = buildApplicationResult(job, (app.retryCount || 0), resumeState);
-  applySubmissionResultVisuals(submissionResult);
+  const resumeState = { ...profileState, autoApply: true, resumeUploaded: true };
+  const currentRetryCount = app.retryCount || 0;
+  const resolved = resolveSubmissionOutcome(job, currentRetryCount, resumeState);
+  const result = await applyOutcomeToApplication(job, resolved.outcome, {
+    retryCount: resolved.retryExhausted ? currentRetryCount : currentRetryCount + (String(resolved.outcome).toLowerCase().includes('temporary') ? 1 : 0),
+    failureReason: resolved.retryExhausted ? `Retry limit (${MAX_RETRY_COUNT}) exhausted.` : undefined,
+    extra: {notes: automationInfo.notes}
+  });
 
-  switch(submissionResult){
-    case 'Success':
-    case 'success':
-      job.workflowStatus = 'Success';
-      job.workflowFinalStatus = 'success';
-      await executeWorkflowNode(job, 'n16', 'success', 'completed');
-      await executeWorkflowNode(job, 'n17', 'success', 'completed');
-      persistApplication(job, 'Success', {confirmationMessage:'Application submitted successfully.', submittedAt:new Date().toISOString(), notes:'Application submitted successfully.', retryCount:(app.retryCount || 0)});
-      addActivity(`Application succeeded for ${job.jobTitle} at ${job.company}.`);
-      addNotification('Application Submitted', `${job.jobTitle} at ${job.company} was submitted successfully.`);
-      break;
-    case 'Temporary Failure':
-    case 'temporary_failure':
-      job.workflowStatus = 'Temporary Failure';
-      job.workflowFinalStatus = 'temporary_failure';
-      await executeWorkflowNode(job, 'n16', 'temporary_failure', 'completed');
-      await executeWorkflowNode(job, 'n17', 'temporary_failure', 'completed');
-      persistApplication(job, 'Temporary Failure', {failureReason:'Temporary failure during submission.', retryCount:(app.retryCount || 0) + 1, nextRetryAt:new Date().toISOString(), notes:'Temporary failure during submission; retry scheduled.'});
-      addActivity(`Application temporarily failed for ${job.jobTitle} at ${job.company}.`);
-      addNotification('Temporary Failure', `${job.jobTitle} at ${job.company} needs another attempt.`);
-      break;
-    case 'Manual Action Needed':
-    case 'manual_action_needed':
-      job.workflowStatus = 'Manual Action Needed';
-      job.workflowFinalStatus = 'manual_action_needed';
-      const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'Manual action required before submission.', manualActionReason: pickManualActionReason(job)});
-      workflowPauseContext = {jobId: job.id, appId: manualApp.id};
-      if(queueEntry) queueEntry.status = 'waiting_manual_review';
-      workflowState.currentStatus = 'paused';
-      workflowState.pauseReason = 'manual_review';
-      setWorkflowState('paused', {pauseReason:'manual_review'});
-      addActivity(`Manual action required for ${job.jobTitle} at ${job.company}.`);
-      addNotification('Manual Action Needed', `${job.jobTitle} at ${job.company} requires manual completion before submission.`);
-      await executeWorkflowNode(job, 'n16', 'completed', 'completed');
-      await executeWorkflowNode(job, 'n17', 'completed', 'completed');
-      renderApplicationsTable();
-      renderDashboard();
-      renderAnalytics();
-      renderNotifications();
-      workflowRunning = false;
-      if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-      showToast('Workflow paused for manual action.', 'warning');
-      return 'manual_action_needed';
-    case 'Permanent Failure':
-    case 'permanent_failure':
-      job.workflowStatus = 'Permanent Failure';
-      job.workflowFinalStatus = 'permanent_failure';
-      await executeWorkflowNode(job, 'n16', 'permanent_failure', 'completed');
-      await executeWorkflowNode(job, 'n17', 'permanent_failure', 'completed');
-      persistApplication(job, 'Permanent Failure', {failureReason:'Permanent failure during submission.', notes:'The application could not be submitted automatically.'});
-      addActivity(`Application permanently failed for ${job.jobTitle} at ${job.company}.`);
-      addNotification('Permanent Failure', `${job.jobTitle} at ${job.company} could not be submitted. No further retries will be attempted.`);
-      break;
-    default:
-      throw new Error('Unknown submission result');
+  if(result.normalized === 'manual_action_needed'){
+    if(queueEntry) queueEntry.status = 'waiting_manual_review';
+    workflowState.currentStatus = 'paused';
+    workflowState.pauseReason = 'manual_review';
+    setWorkflowState('paused', {pauseReason:'manual_review'});
+    syncApplicationViews();
+    workflowRunning = false;
+    if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+    showToast('Workflow paused for manual action.', 'warning');
+    return 'manual_action_needed';
   }
+
+  await executeWorkflowNode(job, 'n16', result.normalized, 'completed');
+  await executeWorkflowNode(job, 'n17', result.normalized, 'completed');
 
   if(queueEntry) queueEntry.status = 'completed';
   workflowState.currentStatus = 'completed';
   workflowState.pauseReason = '';
   workflowPauseContext = null;
   saveAppState();
-  renderApplicationsTable();
-  renderDashboard();
-  renderAnalytics();
-  renderNotifications();
+  syncApplicationViews();
 
   await processRemainingWorkflowQueue(job.id);
   workflowRunning = false;
   if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-  return submissionResult ? String(submissionResult).toLowerCase().replace(/ /g,'_') : 'completed';
+  return result.normalized;
 }
 
-/* ---------------------------------------------------------------------
-   FIX (audit #3 — Temporary Failure retry): previously there was no way
-   to retry a Temporary Failure application at all. retryApplication()
-   reuses the SAME application record (matched by jobId inside
-   persistApplication, so it can never create a duplicate row),
-   increments retryCount, reruns buildApplicationResult(), and can land
-   on Success, Permanent Failure, Manual Action Needed, or remain a
-   Temporary Failure (in which case it can be retried again). Every
-   surface (Applications/Dashboard/Analytics/Activity/Notifications) is
-   refreshed and localStorage is persisted via persistApplication/
-   addActivity/addNotification, exactly like every other status change.
-   --------------------------------------------------------------------- */
+/* AUDIT FIX #3 — retryApplication() reuses the SAME application record
+   (matched by jobId inside persistApplication, so it can never create a
+   duplicate row), increments retryCount, and re-resolves the outcome
+   through resolveSubmissionOutcome() — the single place the retry-limit
+   rule lives — so it can land on Success, Permanent Failure (either from
+   the outcome itself or from exhausting the retry limit), Manual Action
+   Needed, or remain a Temporary Failure (retryable again, up to the
+   limit). Every surface is refreshed via persistApplication/addActivity/
+   addNotification, exactly like every other status change. */
 async function retryApplication(appId){
   if(workflowRunning){ showToast('Workflow is currently running. Please wait.', 'warning'); return; }
   const app = sampleApplications.find(a=>a.id===appId);
   if(!app || app.status !== 'Temporary Failure') return;
+  if((app.retryCount || 0) >= MAX_RETRY_COUNT){
+    showToast('Retry limit reached. This application has been marked as a permanent failure.', 'warning');
+    return;
+  }
 
   const job = getWorkflowJobForApp(app) || {
     id: app.jobId, jobTitle: app.jobTitle, company: app.company,
@@ -1652,51 +1769,30 @@ async function retryApplication(appId){
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if(runBtn){ runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
 
-  const nextRetryCount = (app.retryCount || 0) + 1;
+  const currentRetryCount = app.retryCount || 0;
   await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
-  const outcome = buildApplicationResult(job, nextRetryCount, profileState);
-  applySubmissionResultVisuals(String(outcome).toLowerCase().replace(/ /g,'_'));
+  const resolved = resolveSubmissionOutcome(job, currentRetryCount, profileState);
+  const result = await applyOutcomeToApplication(job, resolved.outcome, {
+    retryCount: resolved.retryExhausted ? currentRetryCount : currentRetryCount + (String(resolved.outcome).toLowerCase().includes('temporary') ? 1 : 0),
+    failureReason: resolved.retryExhausted ? `Retry limit (${MAX_RETRY_COUNT}) exhausted.` : undefined,
+    extra: {notes:'Manual retry.'}
+  });
 
-  switch(outcome){
-    case 'Success':
-    case 'success':
-      persistApplication(job, 'Success', {confirmationMessage:'Application submitted successfully on retry.', submittedAt:new Date().toISOString(), retryCount:nextRetryCount, notes:'Retried and succeeded.', failureReason:''});
-      addActivity(`Retry succeeded for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-      addNotification('Application Submitted', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} was submitted successfully on retry.`);
-      showToast('Retry succeeded.', 'success');
-      break;
-    case 'Manual Action Needed':
-    case 'manual_action_needed':
-      persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, retryCount:nextRetryCount, failureReason:'Manual action required.', notes:'Retry requires manual action.', manualActionReason: pickManualActionReason(job)});
-      addActivity(`Retry requires manual action for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-      addNotification('Manual Action Needed', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} requires manual completion before submission.`);
-      showToast('Retry requires manual action.', 'warning');
-      break;
-    case 'Permanent Failure':
-    case 'permanent_failure':
-      persistApplication(job, 'Permanent Failure', {retryCount:nextRetryCount, failureReason:'Permanent failure during retry.', notes:'Retry failed permanently.'});
-      addActivity(`Retry permanently failed for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-      addNotification('Permanent Failure', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} could not be submitted. No further retries will be attempted.`);
-      showToast('Retry failed permanently.', 'error');
-      break;
-    case 'Temporary Failure':
-    case 'temporary_failure':
-    default:
-      persistApplication(job, 'Temporary Failure', {retryCount:nextRetryCount, failureReason:'Temporary failure persisted on retry.', nextRetryAt:new Date().toISOString(), notes:'Temporary failure persisted; another retry is available.'});
-      addActivity(`Retry still temporarily failing for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-      addNotification('Temporary Failure', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} still needs another attempt.`);
-      showToast('Still a temporary failure. You can retry again.', 'warning');
-      break;
-  }
+  const toastByOutcome = {
+    success: ['Retry succeeded.', 'success'],
+    manual_action_needed: ['Retry requires manual action.', 'warning'],
+    permanent_failure: [resolved.retryExhausted ? 'Retry limit reached — marked as permanent failure.' : 'Retry failed permanently.', 'error'],
+    temporary_failure: ['Still a temporary failure. You can retry again.', 'warning']
+  };
+  const [toastMsg, toastType] = toastByOutcome[result.normalized] || ['Retry processed.', 'info'];
+  showToast(toastMsg, toastType);
 
-  await executeWorkflowNode(job, 'n16', 'completed', 'completed');
-  await executeWorkflowNode(job, 'n17', 'completed', 'completed');
-  await executeWorkflowNode(job, 'n18', 'completed', 'completed'); // Process Next Job
+  await executeWorkflowNode(job, 'n16', result.normalized, 'completed');
+  await executeWorkflowNode(job, 'n17', result.normalized, 'completed');
+  await executeWorkflowNode(job, 'n18', 'completed', 'completed');
 
-  renderApplicationsTable();
-  renderDashboard();
-  renderAnalytics();
-  renderNotifications();
+  syncApplicationViews();
+  runConsistencyCheck();
 
   workflowRunning = false;
   setWorkflowState('completed');
@@ -1734,23 +1830,26 @@ async function runWorkflow(){
     return;
   }
 
-  addActivity('Workflow started.');
-  addNotification('Workflow Started', 'The workflow has begun.');
-
   scanWaiting = false;
   await highlightNode('n1');
   await highlightNode('n2');
 
+  // ---- Find Jobs (n3) ----
   const foundJobs = await jobProviderService.fetchJobs(createJobProviderContext());
   const filteredJobs = applyJobProviderFilters(filterUniqueJobs(foundJobs));
+  await highlightNode('n3');
+
+  // ---- Remove Duplicates (n4) ----
+  await highlightNode('n4', filteredJobs.length ? 'completed' : 'skipped');
+
+  // ---- AI Match Jobs / Calculate Match Score (n5, n6) ----
   const threshold = Number(profileState.minMatchScore || 75);
   const scoredJobs = filteredJobs.map(job => {
     const matchScore = computeJobMatchScore(job);
-    const matched = true;
     return {
       ...job,
       matchScore,
-      matched,
+      matched: matchScore >= threshold, // AUDIT FIX: matched now reflects the real threshold check, not a hardcoded `true`
       workflowStatus: 'Found',
       workflowFinalStatus: 'found'
     };
@@ -1759,32 +1858,33 @@ async function runWorkflow(){
   appState.jobs = jobsData;
   saveAppState();
   addActivity(`${scoredJobs.length} jobs were discovered.`);
-  addNotification('Jobs Found', `${scoredJobs.length} jobs were discovered.`);
-  await highlightNode('n3');
-  await highlightNode('n4', scoredJobs.length ? 'completed' : 'skipped');
+  addNotification('Job Found', `${scoredJobs.length} jobs were discovered.`);
   await highlightNode('n5');
   await highlightNode('n6');
 
-  const matchedJobs = scoredJobs.filter(job => true);
+  // ---- Match Score Above Threshold? (d7) — single decision for the whole batch ----
+  const matchedJobs = scoredJobs.filter(job => job.matched);
+  const belowThresholdJobs = scoredJobs.filter(job => !job.matched);
+  await executeWorkflowNode(null, 'd7', 'matching', matchedJobs.length ? 'completed' : 'skipped');
+
+  belowThresholdJobs.forEach(job=>{
+    job.workflowStatus = 'Skipped';
+    job.workflowFinalStatus = 'skipped';
+    persistApplication(job, 'Skipped', {skipReason:'Match score below threshold', notes:'Skipped because the match score was below the configured threshold.'});
+  });
+  if(belowThresholdJobs.length){
+    await executeWorkflowNode(null, 'skip', 'skipped', 'completed');
+    await executeWorkflowNode(null, 'n18', 'completed', 'completed');
+  }
+
   if(!matchedJobs.length){
-    await executeWorkflowNode(null, 'd7', 'skipped', 'skipped');
-    markWorkflowNodesSkipped(['n8','n9','n10','n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','n18','pending','skip']);
-    addNotification('No Jobs Matched', 'No jobs met the configured minimum match score.');
-    addNotification('Workflow Completed', `${scoredJobs.length} jobs were found and none matched the minimum score.`);
-    setWorkflowState('completed');
-    workflowRunning = false;
-    if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-    showToast('Workflow completed. No jobs matched the threshold.', 'info');
+    markWorkflowNodesSkipped(['n8','n9','n10','n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','pending']);
+    addNotification('Jobs Matched', '0 jobs matched your configured threshold.');
+    await completeScanCycle({paused:false});
     return;
   }
 
   addNotification('Jobs Matched', `${matchedJobs.length} jobs matched your configured threshold.`);
-  const existingJobKeys = new Set(sampleApplications.map(a=>`${a.jobTitle}|${a.company}|${a.location}`));
-  const blacklistedCompanies = new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v=>v.toLowerCase()));
-  const dailyLimit = Number(profileState.dailyLimit) || 30;
-  let applicationsCount = 0;
-  let completedJobs = 0;
-  let waitingForNextScan = false;
 
   workflowState.queue = matchedJobs.map(job => ({
     id: job.id,
@@ -1802,207 +1902,24 @@ async function runWorkflow(){
   workflowState.pauseReason = '';
   saveAppState();
 
-  for(const job of matchedJobs){
-    const queueEntry = workflowState.queue.find(entry => entry.jobId === job.id) || workflowState.queue[0];
-    if(!queueEntry) continue;
-    queueEntry.status = 'processing';
-    workflowState.currentJobId = job.id;
-    workflowState.currentStatus = 'processing';
-    workflowState.pauseReason = '';
-    saveAppState();
-    const jobKey = `${job.jobTitle || job.title}|${job.company}|${job.location}`;
-    const isAboveThreshold = Number(job.matchScore) >= Number(profileState.minMatchScore);
-    await executeWorkflowNode(job, 'd7', 'matching', isAboveThreshold ? 'completed' : 'skipped');
+  const ctx = {
+    existingJobKeys: new Set(sampleApplications.filter(a=>a.status!=='Skipped').map(a=>`${a.jobTitle}|${a.company}|${a.location}`)),
+    blacklistedCompanies: new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v=>v.toLowerCase())),
+    dailyLimit: Number(profileState.dailyLimit) || 30,
+    applicationsCount: sampleApplications.filter(a=>['Success','Temporary Failure','Permanent Failure'].includes(a.status)).length,
+    completedJobs: 0
+  };
 
-    if(!isAboveThreshold){
-      job.workflowStatus = 'Skipped';
-      job.workflowFinalStatus = 'skipped';
-      persistApplication(job, 'Skipped', {skipReason:'Match score below threshold', notes:'Skipped because the match score was below the configured threshold.'});
-      queueEntry.status = 'completed';
-      workflowState.currentStatus = 'completed';
-      saveAppState();
-      await executeWorkflowNode(job, 'skip', 'skipped', 'completed');
-      await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-      completedJobs += 1;
-      continue;
-    }
-
-    await executeWorkflowNode(job, 'n8', 'filtering', 'completed');
-    const preferencePass = applyPreferenceFilters([job]).length > 0;
-    if(!preferencePass){
-      job.workflowStatus = 'Skipped';
-      job.workflowFinalStatus = 'skipped';
-      persistApplication(job, 'Skipped', {skipReason:'Job did not match preferences', notes:'Skipped because the job did not match the configured preferences.'});
-      queueEntry.status = 'completed';
-      saveAppState();
-      await executeWorkflowNode(job, 'n9', 'skipped', 'skipped');
-      await executeWorkflowNode(job, 'skip', 'skipped', 'completed');
-      await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-      completedJobs += 1;
-      continue;
-    }
-
-    const isAlreadyApplied = existingJobKeys.has(jobKey);
-    const isBlacklisted = blacklistedCompanies.has(String(job.company||'').toLowerCase());
-    await executeWorkflowNode(job, 'n9', 'checking_limits', (isAlreadyApplied || isBlacklisted) ? 'skipped' : 'completed');
-    if(isAlreadyApplied || isBlacklisted){
-      job.workflowStatus = 'Skipped';
-      job.workflowFinalStatus = 'skipped';
-      persistApplication(job, 'Skipped', {skipReason:isBlacklisted ? 'Blacklisted company' : 'Already applied', notes:'Skipped because the company is blacklisted or the job was already applied to.'});
-      queueEntry.status = 'completed';
-      saveAppState();
-      markWorkflowNodesSkipped(['d15','n14','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
-      await executeWorkflowNode(job, 'skip', 'skipped', 'completed');
-      await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-      completedJobs += 1;
-      continue;
-    }
-
-    await executeWorkflowNode(job, 'n10', 'checking_limits', 'completed');
-    if(applicationsCount >= dailyLimit){
-      markWorkflowNodesSkipped(['n11','n12','d13','n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17','pending','skip']);
-      await executeWorkflowNode(job, 'n19', 'pending', 'pending');
-      addActivity('Daily limit reached. Waiting for the next scan cycle.');
-      addNotification('Pending Review', 'Daily application limit reached. The workflow is waiting for the next scan.');
-      waitingForNextScan = true;
-      scanWaiting = true;
-      workflowState.pauseReason = 'daily_limit';
-      workflowState.currentStatus = 'paused';
-      workflowState.currentJobId = job.id;
-      saveAppState();
-      break;
-    }
-
-    await executeWorkflowNode(job, 'n11', 'preparing', 'completed');
-    await executeWorkflowNode(job, 'n12', 'preparing', 'completed');
-
-    const automationInfo = prepareApplicationPayload(job);
-    const manualReviewRequired = automationInfo.manualReviewRequired || !profileState.autoApply;
-    if(manualReviewRequired){
-      job.workflowStatus = 'Pending Review';
-      job.workflowFinalStatus = 'pending_review';
-      setJobExecutionState(job, 'pending_review');
-      await executeWorkflowNode(job, 'd13', 'pending_review', 'completed');
-      markWorkflowNodesSkipped(['n14','d15','success','tempfail','manual','permfail','st-success','st-temp','st-manual','st-perm','n16','n17']);
-      const application = persistApplication(job, 'Pending Review', {manualReviewRequired:true, coverLetter: profileState.autoCover ? createCoverLetter(job) : '', notes: automationInfo.notes});
-      queueEntry.status = 'waiting_manual_review';
-      workflowState.pauseReason = 'manual_review';
-      workflowState.currentStatus = 'paused';
-      workflowState.currentJobId = job.id;
-      workflowPauseContext = {jobId: job.id, appId: application.id};
-      addActivity(`Workflow paused for ${job.jobTitle || job.title} at ${job.company}.`);
-      addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
-      await executeWorkflowNode(job, 'pending', 'pending_review', 'pending');
-      workflowRunning = false;
-      setWorkflowState('paused', {pauseReason:'manual_review'});
-      if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+  const result = await runQueueLoop(0, ctx);
+  if(result.paused){
+    workflowRunning = false;
+    if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
+    if(result.reason === 'manual_review'){
       showToast('Workflow paused for pending review.', 'warning');
-      saveAppState();
       return;
     }
-
-    await executeWorkflowNode(job, 'd13', 'applying', 'skipped');
-    await executeWorkflowNode(job, 'n14', 'applying', 'completed');
-    await executeWorkflowNode(job, 'd15', 'submission_result', 'completed');
-
-    let outcome = null;
-    for(let attempt=0; attempt < 2; attempt += 1){
-      outcome = buildApplicationResult(job, attempt, profileState);
-      if(outcome === 'Temporary Failure' || outcome === 'temporary_failure'){
-        job.retryCount = (job.retryCount || 0) + 1;
-        if(attempt === 0){
-          continue;
-        }
-      }
-      break;
-    }
-    if(outcome === 'Temporary Failure' || outcome === 'temporary_failure'){
-      outcome = 'Temporary Failure';
-    }
-    const submissionResult = outcome; 
-    applySubmissionResultVisuals(submissionResult.toLowerCase().replace(/ /g, '_'));
-
-    switch(submissionResult){
-      case 'Success':
-      case 'success':
-        job.workflowStatus = 'Success';
-        job.workflowFinalStatus = 'success';
-        persistApplication(job, 'Success', {confirmationMessage:'Application submitted successfully.', submittedAt:new Date().toISOString(), notes: automationInfo.notes, retryCount:(job.retryCount || 0)});
-        addActivity(`Application succeeded for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Application Submitted', `${job.jobTitle || job.title} at ${job.company} was submitted successfully.`);
-        await executeWorkflowNode(job, 'n16', 'completed', 'completed');
-        await executeWorkflowNode(job, 'n17', 'completed', 'completed');
-        applicationsCount += 1;
-        existingJobKeys.add(jobKey);
-        await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-        completedJobs += 1;
-        break;
-      case 'Temporary Failure':
-      case 'temporary_failure':
-        job.workflowStatus = 'Temporary Failure';
-        job.workflowFinalStatus = 'temporary_failure';
-        persistApplication(job, 'Temporary Failure', {failureReason:'Temporary failure during submission.', retryCount:(job.retryCount || 0) + 1, nextRetryAt:new Date().toISOString(), notes:'Temporary failure; another attempt will be scheduled.'});
-        addActivity(`Application temporarily failed for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Temporary Failure', `${job.jobTitle || job.title} at ${job.company} needs another attempt.`);
-        await executeWorkflowNode(job, 'n16', 'completed', 'completed');
-        await executeWorkflowNode(job, 'n17', 'completed', 'completed');
-        applicationsCount += 1;
-        existingJobKeys.add(jobKey);
-        await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-        completedJobs += 1;
-        break;
-      case 'Manual Action Needed':
-      case 'manual_action_needed':
-        job.workflowStatus = 'Manual Action Needed';
-        job.workflowFinalStatus = 'manual_action_needed';
-        const manualApp = persistApplication(job, 'Manual Action Needed', {manualReviewRequired:true, failureReason:'Manual action required.', notes:'The application could not be submitted automatically.', manualActionReason: pickManualActionReason(job)});
-        workflowPauseContext = {jobId: job.id, appId: manualApp.id};
-        addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
-        await executeWorkflowNode(job, 'pending', 'manual_action_needed', 'pending');
-        workflowRunning = false;
-        setWorkflowState('paused', {pauseReason:'manual_review'});
-        if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-        showToast('Workflow paused for manual action.', 'warning');
-        saveAppState();
-        return;
-      case 'Permanent Failure':
-      case 'permanent_failure':
-        job.workflowStatus = 'Permanent Failure';
-        job.workflowFinalStatus = 'permanent_failure';
-        persistApplication(job, 'Permanent Failure', {failureReason:'Permanent failure during submission.', notes:'The application could not be submitted due to a permanent issue.'});
-        addActivity(`Application permanently failed for ${job.jobTitle || job.title} at ${job.company}.`);
-        addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted. No further retries will be attempted.`);
-        await executeWorkflowNode(job, 'n16', 'completed', 'completed');
-        await executeWorkflowNode(job, 'n17', 'completed', 'completed');
-        applicationsCount += 1;
-        existingJobKeys.add(jobKey);
-        await executeWorkflowNode(job, 'n18', 'completed', 'completed');
-        completedJobs += 1;
-        break;
-      default:
-        throw new Error('Unknown submission result');
-    }
-    queueEntry.status = 'completed';
-    saveAppState();
   }
-
-  if(completedJobs >= matchedJobs.length && !waitingForNextScan){
-    await executeWorkflowNode(null, 'n19', 'pending', 'pending');
-    addActivity('All current jobs processed. Waiting for the next scan.');
-    addNotification('Workflow Completed', 'All jobs were processed. The workflow is awaiting the next scan.');
-    waitingForNextScan = true;
-    scanWaiting = true;
-    workflowState.currentStatus = 'completed';
-    workflowState.pauseReason = 'completed';
-    saveAppState();
-  }
-
-  renderNotifications();
-  workflowRunning = false;
-  setWorkflowState(waitingForNextScan ? 'paused' : 'completed', waitingForNextScan ? {pauseReason:'next_scan'} : {});
-  if(runBtn){ runBtn.disabled=false; runBtn.textContent='Run Workflow'; }
-  showToast(waitingForNextScan ? 'Workflow paused until next scan.' : 'Workflow completed.', waitingForNextScan ? 'info' : 'success');
+  await completeScanCycle(result);
 }
 
 function resetDemoData(){
@@ -2012,6 +1929,9 @@ function resetDemoData(){
   appState.applications = [];
   appState.notifications = [];
   appState.activity = [];
+  workflowState = createDefaultWorkflowState();
+  workflowPauseContext = null;
+  scanWaiting = false;
   saveAppState();
   clearWorkflowNodeStyles();
   renderApplicationsTable();
@@ -2838,9 +2758,12 @@ panel.addEventListener('pointerdown', (e)=> e.stopPropagation()); // never let c
 
 /* =====================================================================
    DASHBOARD / APPLICATIONS / ANALYTICS
-   One sample data array powers all three pages. Swap this array (or feed
-   it from a backend response) and every stat/table/chart below recalculates
-   automatically — nothing else needs to change.
+
+   AUDIT FIX #4 / #5 — computeDashboardStats() is the ONE function that
+   derives every count from live data (appState.jobs + sampleApplications).
+   Both renderDashboard() and renderAnalytics() call it, so the two pages
+   can never disagree — there is no second, independently maintained
+   counter anywhere in the app.
    ===================================================================== */
 const STATUS_META = {
   'Success':            {cls:'status-success',  icon:'✔'},
@@ -2866,12 +2789,11 @@ function daysSince(dateStr){
 function computeDashboardStats(){
   const jobs = (appState.jobs || []).map(job=>normalizeApplicationRecord(job, job));
   const applications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
-  const matchedJobsCount = jobs.filter(j=>Boolean(j.matched)).length;
-  const trackedStatuses = ['Success','Pending Review','Manual Action Needed','Temporary Failure','Permanent Failure','Skipped'];
+  const jobsMatchedCount = jobs.filter(j=>Boolean(j.matched)).length;
   return {
     jobsFound: jobs.length,
-    jobsMatched: Math.min(matchedJobsCount, jobs.length),
-    applicationsSent: applications.filter(a=>trackedStatuses.includes(a.status)).length,
+    jobsMatched: jobsMatchedCount,
+    applicationsSent: applications.length,
     pendingReviews: applications.filter(a=>['Pending Review','Manual Action Needed'].includes(a.status)).length,
     successful: applications.filter(a=>a.status==='Success').length,
     temporaryFailures: applications.filter(a=>a.status==='Temporary Failure').length,
@@ -2937,6 +2859,9 @@ function renderDashboard(){
 
   const activityList = document.getElementById('dashActivityList');
   if(activityList){
+    // AUDIT FIX #9 — Recent Activity is derived from the SAME application
+    // records shown on the Applications page (sampleApplications), sorted
+    // newest-first, so the two views can never disagree.
     const recent = (sampleApplications || []).map(app=>normalizeApplicationRecord(app)).sort((a,b)=> new Date(b.dateTime || b.date)-new Date(a.dateTime || a.date)).slice(0,6);
     activityList.innerHTML = recent.length ? recent.map(a=>{
       const meta = STATUS_META[a.status] || {cls:'',icon:''};
@@ -2959,12 +2884,27 @@ function renderDashboard(){
   }
 }
 
+/* AUDIT FIX #6 — filters now work against the live, actually-used set of
+   sources (populated dynamically below) and statuses, and search/sort
+   operate on the same single sampleApplications array used everywhere
+   else. */
+function populateApplicationsFilterOptions(){
+  const sourceSelect = document.getElementById('appsSourceFilter');
+  if(!sourceSelect) return;
+  const currentValue = sourceSelect.value || 'All';
+  const sources = Array.from(new Set((sampleApplications || []).map(a=>a.source).filter(Boolean))).sort();
+  sourceSelect.innerHTML = '<option value="All">All Sources</option>' + sources.map(s=>`<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+  sourceSelect.value = sources.includes(currentValue) ? currentValue : 'All';
+}
+
 function renderApplicationsTable(){
   const tbody = document.getElementById('appsTableBody');
   if(!tbody) return;
   const searchEl = document.getElementById('appsSearchInput');
   const filterEl = document.getElementById('appsStatusFilter');
   const emptyState = document.getElementById('appsEmptyState');
+
+  populateApplicationsFilterOptions();
 
   const query = (searchEl && searchEl.value || '').trim().toLowerCase();
   const statusFilter = (filterEl && filterEl.value) || 'All';
@@ -3005,10 +2945,8 @@ function renderApplicationsTable(){
         <button type="button" class="apps-action-btn" data-action="mark-manual-failed" data-app-id="${a.id}">Mark Failed</button>
       `;
     } else if(a.status === 'Temporary Failure'){
-      /* FIX (audit #3): Retry action for Temporary Failure — was completely
-         missing before. Reuses the same record via persistApplication's
-         jobId match, so this can never create a duplicate row. */
-      reviewButtons = `<button type="button" class="apps-action-btn" data-action="retry-application" data-app-id="${a.id}">Retry</button>`;
+      const retryDisabled = (a.retryCount || 0) >= MAX_RETRY_COUNT;
+      reviewButtons = `<button type="button" class="apps-action-btn" data-action="retry-application" data-app-id="${a.id}" ${retryDisabled ? 'disabled title="Retry limit reached"' : ''}>Retry (${a.retryCount || 0}/${MAX_RETRY_COUNT})</button>`;
     }
     return `<tr>
       <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
@@ -3033,13 +2971,16 @@ function renderApplicationsTable(){
   }
 }
 
+/* AUDIT FIX #5 — Analytics is derived from the same computeDashboardStats()
+   output as the Dashboard, plus match-score/day/role breakdowns computed
+   live from sampleApplications. Nothing here is hardcoded. */
 function renderAnalytics(){
   const grid = document.getElementById('analyticsStatsGrid');
   if(!grid) return;
+  const stats = computeDashboardStats();
   const applications = (sampleApplications || []).map(app=>normalizeApplicationRecord(app));
-  const total = applications.length;
-  const successCount = applications.filter(a=>a.status==='Success').length;
-  const successRate = total ? Math.round((successCount/total)*100) : 0;
+  const total = stats.applicationsSent;
+  const successRate = total ? Math.round((stats.successful/total)*100) : 0;
   const avgMatch = total ? Math.round(applications.reduce((sum,a)=>sum+a.matchScore,0)/total) : 0;
   const thisWeek = applications.filter(a=>daysSince(a.date) <= 7).length;
 
@@ -3099,6 +3040,9 @@ function handleOpenManualApplication(appId){
   openApplicationForRecord(app);
 }
 
+/* AUDIT FIX #3 — Mark Completed → Success → Dashboard/Analytics update →
+   exactly one Success ("Application Submitted") notification, routed
+   through the shared applyOutcomeToApplication() helper. */
 async function handleMarkManualCompleted(appId){
   if(workflowRunning){ showToast('Workflow is currently running. Please wait.', 'warning'); return; }
   const app = sampleApplications.find(a=>a.id===appId);
@@ -3121,24 +3065,11 @@ async function handleMarkManualCompleted(appId){
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if(runBtn){ runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
 
-  job.workflowStatus = 'Success';
-  job.workflowFinalStatus = 'success';
-  persistApplication(job, 'Success', {
-    manualReviewRequired: false,
-    confirmationMessage: 'Manual application completed successfully.',
-    submittedAt: completedAt,
-    completedAt,
-    manualActionReason: '',
-    manualActionReasonHistory: reasonHistory,
-    notes: 'Manually completed by user.'
+  await applyOutcomeToApplication(job, 'success', {
+    extra: {completedAt, manualActionReasonHistory: reasonHistory, notes:'Manually completed by user.', confirmationMessage:'Manual application completed successfully.'}
   });
 
-  addActivity(`Manual application completed for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-  addNotification('Application Submitted', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} was submitted successfully.`);
-  renderApplicationsTable();
-  renderDashboard();
-  renderAnalytics();
-  renderNotifications();
+  syncApplicationViews();
   showToast('Marked as completed.', 'success');
 
   const queueEntry = findQueueEntryByJobId(job.id);
@@ -3153,6 +3084,9 @@ async function handleMarkManualCompleted(appId){
   if(runBtn){ runBtn.disabled = false; runBtn.textContent = 'Run Workflow'; }
 }
 
+/* AUDIT FIX #3 — Mark Failed → Permanent Failure → Dashboard/Analytics
+   update → exactly one failure notification, routed through the shared
+   applyOutcomeToApplication() helper. */
 async function handleMarkManualFailed(appId){
   if(workflowRunning){ showToast('Workflow is currently running. Please wait.', 'warning'); return; }
   const app = sampleApplications.find(a=>a.id===appId);
@@ -3177,22 +3111,12 @@ async function handleMarkManualFailed(appId){
   const runBtn = document.querySelector('[data-action="run-workflow"]');
   if(runBtn){ runBtn.disabled = true; runBtn.textContent = 'Workflow Running...'; }
 
-  job.workflowStatus = 'Permanent Failure';
-  job.workflowFinalStatus = 'permanent_failure';
-  persistApplication(job, 'Permanent Failure', {
-    manualReviewRequired: false,
+  await applyOutcomeToApplication(job, 'permanent_failure', {
     failureReason,
-    manualActionReason: '',
-    manualActionReasonHistory: reasonHistory,
-    notes: 'Manually marked as failed by user.'
+    extra: {manualActionReasonHistory: reasonHistory, notes:'Manually marked as failed by user.'}
   });
 
-  addActivity(`Manual application failed for ${job.jobTitle || app.jobTitle} at ${job.company || app.company}.`);
-  addNotification('Permanent Failure', `${job.jobTitle || app.jobTitle} at ${job.company || app.company} could not be submitted. No further retries will be attempted.`);
-  renderApplicationsTable();
-  renderDashboard();
-  renderAnalytics();
-  renderNotifications();
+  syncApplicationViews();
   showToast('Marked as failed.', 'info');
 
   const queueEntry = findQueueEntryByJobId(job.id);
@@ -3219,11 +3143,8 @@ if(appsTableBodyEl){
       if(app && ['Pending Review','Manual Action Needed'].includes(app.status)){
         const subject = job || {...app, id: app.jobId || app.id};
         persistApplication(subject, app.status, {notes:'Approved for submission.', manualReviewRequired:false});
-        renderApplicationsTable();
-        renderDashboard();
-        renderAnalytics();
+        syncApplicationViews();
         addActivity(`Application approved for ${app.jobTitle} at ${app.company}.`);
-        renderNotifications();
         const result = await resumeApprovalWorkflow(app, 'approve');
         if(result === 'success'){
           showToast('Application submitted successfully.', 'success');
@@ -3249,22 +3170,15 @@ if(appsTableBodyEl){
           if(queueEntry) queueEntry.status = 'completed';
           workflowState.currentStatus = 'processing';
           saveAppState();
-          renderApplicationsTable();
-          renderDashboard();
-          renderAnalytics();
+          syncApplicationViews();
           addActivity(`Application rejected for ${app.jobTitle} at ${app.company}.`);
-          renderNotifications();
           showToast('Application rejected and skipped.', 'info');
           workflowPauseContext = null;
           await processRemainingWorkflowQueue(job.id);
         } else {
-          app.notes = 'Rejected manually and skipped.';
           persistApplication(app, 'Skipped', {skipReason:'Rejected by user', failureReason:'Rejected manually and skipped.', notes:'Rejected manually and skipped.', manualReviewRequired:false});
-          renderApplicationsTable();
-          renderDashboard();
-          renderAnalytics();
+          syncApplicationViews();
           addActivity(`Application rejected for ${app.jobTitle} at ${app.company}.`);
-          renderNotifications();
           showToast('Application rejected and skipped.', 'info');
         }
       }
@@ -3292,7 +3206,7 @@ if(appsTableBodyEl){
     }
     const retryBtn = e.target.closest('[data-action="retry-application"]');
     if(retryBtn){
-      /* FIX (audit #3): wire the new Retry button to retryApplication() */
+      if(retryBtn.disabled) return;
       await retryApplication(Number(retryBtn.dataset.appId));
       return;
     }
@@ -3324,6 +3238,11 @@ window.addEventListener('keydown', (event)=>{
     toggleNotificationsPanel(false);
   }
 });
+
+/* AUDIT FIX #12 — run the consistency check once at startup too, so data
+   left behind by an older version of this app (before these fixes) gets
+   repaired before the very first render. */
+runConsistencyCheck();
 
 /* initial render so Dashboard/Applications/Analytics have content the
    first time they're opened, even before their nav button is clicked */
