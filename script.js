@@ -500,6 +500,8 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null) {
   const createdAtValue = source.createdAt || fallback.createdAt || new Date().toISOString();
   const completedAtValue = source.completedAt || fallback.completedAt || '';
   const retryCountValue = Math.max(0, Number(source.retryCount ?? fallback.retryCount ?? 0) || 0);
+  const finalStatusValue = fallbackText(source.finalStatus || fallback.finalStatus || statusValue, statusValue);
+  const runIdValue = source.runId || fallback.runId || null;
   const normalized = {
     ...source,
     ...fallback,
@@ -514,6 +516,7 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null) {
     applyUrl: applyUrlValue,
     matchScore: matchScoreValue,
     status: statusValue,
+    finalStatus: finalStatusValue,
     date: dateValue,
     time: timeValue,
     dateTime: dateTimeValue,
@@ -526,6 +529,8 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null) {
     notes: fallbackText(source.notes || fallback.notes || '', 'No notes yet.'),
     applicationId: applicationIdValue,
     workflowId: workflowIdValue,
+    runId: runIdValue,
+    jobKey: source.jobKey || fallback.jobKey || '',
     manualActionReason: manualActionReasonValue,
     manualActionReasonHistory: manualActionReasonHistoryValue,
     createdAt: createdAtValue,
@@ -543,6 +548,7 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null) {
   if (!normalized.applicationUrl) normalized.applicationUrl = '';
   if (!normalized.applicationId) normalized.applicationId = normalized.id;
   if (!normalized.workflowId) normalized.workflowId = 'workflow-default';
+  if (!normalized.jobKey) normalized.jobKey = computeJobKey(normalized);
   return normalized;
 }
 
@@ -561,7 +567,8 @@ function runConsistencyCheck() {
     const byJob = new Map();
     let removedDupes = 0;
     sampleApplications.forEach(app => {
-      const key = app.jobId !== undefined && app.jobId !== null && app.jobId !== 0 ? `job:${app.jobId}` : `rec:${app.id}`;
+      const jk = app.jobKey || computeJobKey(app);
+      const key = jk ? `jk:${jk}` : (app.jobId !== undefined && app.jobId !== null && app.jobId !== 0 ? `job:${app.jobId}` : `rec:${app.id}`);
       const existing = byJob.get(key);
       if (!existing) { byJob.set(key, app); return; }
       const existingTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
@@ -675,6 +682,10 @@ function saveAppState() {
 }
 
 function addActivity(message) {
+  // Guard against the same status-change event being logged twice in a
+  // row (e.g. a duplicate call for the same job/status transition).
+  const last = appState.activity[0];
+  if (last && last.message === message) return;
   appState.activity.unshift({ id: Date.now(), message, date: new Date().toISOString() });
   if (appState.activity.length > 50) appState.activity.length = 50;
   saveAppState();
@@ -1112,6 +1123,156 @@ let workflowRunId   = 0;       // incremented on every new run; stale callbacks 
 let workflowPauseContext = null;
 let scanWaiting = false;
 
+/* =====================================================================
+   CURRENT-RUN STATS + RUN IDENTITY (fix: "Workflow Completed" modal was
+   showing cumulative all-time data instead of just the current run).
+
+   currentRunStats is reset ONLY when a brand-new workflow run starts
+   (runWorkflow() -> startNewRun()). Every application record carries the
+   runId of the run that created it. When that application's status
+   later changes (retry, mark completed/failed, resume, etc.) we look up
+   which run-scoped bucket it was last counted in and move the count
+   from the old bucket to the new one — so a job is never counted twice
+   and Applications Sent never inflates on a status change.
+
+   Dashboard/Analytics intentionally do NOT read from this — they keep
+   deriving everything live from sampleApplications via
+   computeDashboardStats(), exactly as before, so all-time totals are
+   unaffected by any of this.
+   ===================================================================== */
+function createEmptyRunStats() {
+  return {
+    jobsFound: 0,
+    jobsMatched: 0,
+    applicationsSent: 0,
+    success: 0,
+    pendingReview: 0,
+    manualActionNeeded: 0,
+    temporaryFailure: 0,
+    permanentFailure: 0,
+    skipped: 0,
+    startedAt: null,
+    completedAt: null
+  };
+}
+let currentRunId = null;
+let currentRunStats = createEmptyRunStats();
+/* Maps applicationId -> the run-stat bucket key it is currently counted
+   under (only tracked while that application's runId === currentRunId). */
+let runStatusByAppId = {};
+
+function startNewRun() {
+  currentRunId = 'run-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+  currentRunStats = createEmptyRunStats();
+  currentRunStats.startedAt = new Date().toISOString();
+  runStatusByAppId = {};
+  return currentRunId;
+}
+
+/* Maps an application's display status to the bucket key used in
+   currentRunStats. Returns null for statuses that don't have a
+   dedicated run-stat bucket (e.g. 'Draft', 'Submitted'). */
+function statusToRunStatKey(status) {
+  const map = {
+    'Success': 'success',
+    'Pending Review': 'pendingReview',
+    'Manual Action Needed': 'manualActionNeeded',
+    'Temporary Failure': 'temporaryFailure',
+    'Permanent Failure': 'permanentFailure',
+    'Skipped': 'skipped'
+  };
+  return map[status] || null;
+}
+
+/* The single choke point that keeps currentRunStats in sync with an
+   application's status. Called every time persistApplication() writes a
+   status for an application that belongs to the active run. Moves the
+   count from the old bucket to the new bucket (rather than just
+   incrementing), so re-running this for the same application never
+   double-counts it — satisfies "do not increment multiple statuses for
+   the same application" and "retry succeeding must decrease
+   temporaryFailure and increase success without inflating totals". */
+function updateRunStatsForApplication(app, newStatus) {
+  if (!app || !currentRunId) return;
+  if (app.runId !== currentRunId) return; // only the active run's applications are tracked here
+  const newKey = statusToRunStatKey(newStatus);
+  const prevKey = runStatusByAppId[app.id];
+  if (prevKey === newKey) return; // no real change
+
+  if (prevKey && currentRunStats[prevKey] !== undefined) {
+    currentRunStats[prevKey] = Math.max(0, currentRunStats[prevKey] - 1);
+  }
+  if (newKey) {
+    currentRunStats[newKey] = (currentRunStats[newKey] || 0) + 1;
+  }
+
+  // "Applications Sent" = unique applications that reached a real submission
+  // attempt (i.e. not Skipped) this run — tracked once per app, not per event.
+  const wasCountedAsSent = Boolean(prevKey) && prevKey !== 'skipped';
+  const isCountedAsSent = Boolean(newKey) && newKey !== 'skipped';
+  if (isCountedAsSent && !wasCountedAsSent) currentRunStats.applicationsSent += 1;
+  if (!isCountedAsSent && wasCountedAsSent) currentRunStats.applicationsSent = Math.max(0, currentRunStats.applicationsSent - 1);
+
+  runStatusByAppId[app.id] = newKey;
+}
+
+/* ---------------------------------------------------------------------
+   DUPLICATE / JOB-KEY UTILITIES (fix: workflow repeatedly processing the
+   same companies/job records across runs, inflating failure counts).
+
+   jobKey is a stable identity for "this job posting" independent of the
+   random synthetic id the mock provider mints on every fetch. Two jobs
+   (this run or a past run) with the same company + title + source +
+   originalJobUrl (or a genuinely stable provider id, when one exists)
+   are treated as the same job and are never re-submitted.
+   --------------------------------------------------------------------- */
+function normalizeForKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function computeJobKey(job) {
+  if (!job) return '';
+  // A genuinely stable provider id/url (not the mock's per-fetch random id)
+  // takes priority when present.
+  const stableProviderId = job.stableProviderId || job.externalId || job.providerJobId || '';
+  const originalUrl = normalizeForKey(job.originalJobUrl || job.applicationUrl || job.applyUrl || '');
+  const company = normalizeForKey(job.company);
+  const title = normalizeForKey(job.jobTitle || job.title);
+  const source = normalizeForKey(job.source);
+  if (stableProviderId) return `pid:${normalizeForKey(stableProviderId)}`;
+  return `key:${company}|${title}|${source}|${originalUrl}`;
+}
+
+/* Builds the set of jobKeys that already exist among stored applications
+   (any status) — used to decide whether a newly-found job is a duplicate
+   of something already processed in a previous run (or earlier in this
+   one). */
+function buildExistingJobKeySet(excludeAppId) {
+  const keys = new Set();
+  (sampleApplications || []).forEach(app => {
+    if (excludeAppId !== undefined && app.id === excludeAppId) return;
+    const key = app.jobKey || computeJobKey(app);
+    if (key) keys.add(key);
+  });
+  return keys;
+}
+
+const TEMP_FAILURE_REASONS = [
+  'Network timeout',
+  'Provider temporarily unavailable',
+  'Rate limit exceeded',
+  'Submission timeout'
+];
+const PERM_FAILURE_REASONS = [
+  'Job posting closed',
+  'Invalid application URL',
+  'Provider rejected submission',
+  'Required eligibility not met'
+];
+function pickReason(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
 function applyWorkflowNodeStyle(id, status) {
   const node = nodeState[id];
   if (!node || !node.el) return;
@@ -1299,10 +1460,28 @@ function createCoverLetter(job) {
    WorkflowEngine.buildApplicationResult when available (workflow-engine.js)
    so there is only one implementation of the odds/rules.
    --------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------
+   AUDIT FIX (balanced demo results): the previous version returned
+   'Permanent Failure' for every Glassdoor job and 'Temporary Failure'
+   for every retried Indeed job, deterministically and regardless of
+   which job it was — combined with duplicate reprocessing across runs,
+   this is what made Temporary/Permanent Failure counts balloon past
+   Success. Outcomes are now drawn from a single controlled distribution
+   (Success 55% / Temporary Failure 15% / Permanent Failure 10% /
+   Manual Action Needed 10% / Skipped 10%, renormalized across the four
+   outcomes this function can actually return — Skipped is decided
+   upstream, before a job ever reaches submission). Legitimate
+   context-based gates (no resume, auto-apply off, job explicitly
+   flagged as needing manual action) still short-circuit to Manual
+   Action Needed, since those aren't "random failure," they're real
+   preconditions — everything else is drawn from the fixed distribution,
+   never from company name, source, or array position.
+   This is the ONLY implementation of the odds/rules in the app (no
+   parallel copy in workflow-engine.js — that file is an empty stub). */
+const DEMO_RESULT_WEIGHTS = { success: 55, temporaryFailure: 15, permanentFailure: 10, manualActionNeeded: 10 };
+const DEMO_RESULT_TOTAL = DEMO_RESULT_WEIGHTS.success + DEMO_RESULT_WEIGHTS.temporaryFailure + DEMO_RESULT_WEIGHTS.permanentFailure + DEMO_RESULT_WEIGHTS.manualActionNeeded;
+
 function buildApplicationResult(job, attemptNumber = 0, profileStateOverride, randomProvider) {
-  if (window.WorkflowEngine && typeof window.WorkflowEngine.buildApplicationResult === 'function') {
-    return window.WorkflowEngine.buildApplicationResult(job, attemptNumber, profileStateOverride, randomProvider);
-  }
   const overrideValue = String((window && window.workflowDemoResultOverride) || '').trim().toLowerCase();
   if (['success', 'temporary_failure', 'manual_action_needed', 'permanent_failure'].includes(overrideValue)) {
     return overrideValue;
@@ -1312,23 +1491,17 @@ function buildApplicationResult(job, attemptNumber = 0, profileStateOverride, ra
   if (!autoApply) return 'Manual Action Needed';
   if (!job) return 'Temporary Failure';
   if (!state.resumeUploaded) return 'Manual Action Needed';
-  const baseScore = Number(job && job.matchScore) || 0;
-  const source = String(job.source || '').toLowerCase();
-  const random = typeof randomProvider === 'function' ? randomProvider() : Math.random();
-
   if (job.requiresManualAction) return 'Manual Action Needed';
-  if (source.includes('glassdoor')) return 'Permanent Failure';
-  if (source.includes('indeed') && attemptNumber > 0) return 'Temporary Failure';
 
-  const threshold = Number(state.minMatchScore || 75);
-  if (baseScore >= threshold) {
-    if (random < 0.55) return 'Success';
-    if (random < 0.80) return 'Temporary Failure';
-    return 'Permanent Failure';
-  }
-  if (random < 0.20) return 'Success';
-  if (random < 0.65) return 'Temporary Failure';
-  return 'Permanent Failure';
+  const random = typeof randomProvider === 'function' ? randomProvider() : Math.random();
+  const draw = random * DEMO_RESULT_TOTAL;
+  let cursor = DEMO_RESULT_WEIGHTS.success;
+  if (draw < cursor) return 'Success';
+  cursor += DEMO_RESULT_WEIGHTS.temporaryFailure;
+  if (draw < cursor) return 'Temporary Failure';
+  cursor += DEMO_RESULT_WEIGHTS.permanentFailure;
+  if (draw < cursor) return 'Permanent Failure';
+  return 'Manual Action Needed';
 }
 
 /* ---------------------------------------------------------------------
@@ -1374,7 +1547,7 @@ async function applyOutcomeToApplication(job, outcome, opts = {}) {
       finalStatus = 'Temporary Failure';
       job.workflowStatus = 'Temporary Failure';
       job.workflowFinalStatus = 'temporary_failure';
-      extra = { failureReason: 'Temporary failure during submission.', retryCount: (opts.retryCount ?? job.retryCount ?? 0), nextRetryAt: new Date().toISOString(), ...opts.extra };
+      extra = { failureReason: opts.failureReason || pickReason(TEMP_FAILURE_REASONS), retryCount: (opts.retryCount ?? job.retryCount ?? 0), nextRetryAt: new Date().toISOString(), ...opts.extra };
       persistApplication(job, finalStatus, extra);
       addActivity(`Application temporarily failed for ${job.jobTitle || job.title} at ${job.company}.`);
       addNotification('Temporary Failure', `${job.jobTitle || job.title} at ${job.company} needs another attempt.`);
@@ -1392,7 +1565,7 @@ async function applyOutcomeToApplication(job, outcome, opts = {}) {
       finalStatus = 'Permanent Failure';
       job.workflowStatus = 'Permanent Failure';
       job.workflowFinalStatus = 'permanent_failure';
-      extra = { failureReason: opts.failureReason || 'Permanent failure during submission.', manualActionReason: '', ...opts.extra };
+      extra = { failureReason: opts.failureReason || pickReason(PERM_FAILURE_REASONS), manualActionReason: '', ...opts.extra };
       persistApplication(job, finalStatus, extra);
       addActivity(`Application permanently failed for ${job.jobTitle || job.title} at ${job.company}.`);
       addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted. No further retries will be attempted.`);
@@ -1436,6 +1609,8 @@ function createApplicationRecord(job, status, extra = {}) {
     id: nextId,
     applicationId: nextId,
     workflowId: extra.workflowId || `workflow-${workflowState.currentJobId || 'run'}-${Date.now()}`,
+    runId: extra.runId || job.runId || currentRunId || null,
+    jobKey: job.jobKey || computeJobKey(job),
     createdAt: nowIso,
     manualActionReason: extra.manualActionReason || '',
     jobTitle: job.jobTitle || job.title,
@@ -1448,6 +1623,7 @@ function createApplicationRecord(job, status, extra = {}) {
     date: nowIso.slice(0, 10),
     time: now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
     status,
+    finalStatus: status,
     coverLetter: profileState.autoCover ? createCoverLetter(job) : '',
     notes: extra.notes || '',
     retryCount: extra.retryCount || 0,
@@ -1465,13 +1641,26 @@ function createApplicationRecord(job, status, extra = {}) {
    row, no matter how many times a job passes back through the pipeline
    (retry, resume, mark completed/failed all funnel through here). */
 function persistApplication(job, status, extra = {}) {
-  const existing = sampleApplications.find(app => app.jobId === job.id || (app.jobTitle === (job.jobTitle || job.title) && app.company === job.company && app.location === job.location && app.source === job.source));
-  const application = existing || createApplicationRecord(job, status, extra);
+  const jobKey = (job && job.jobKey) || computeJobKey(job);
+  // AUDIT FIX (dedupe): match by the stable jobKey FIRST — this is what
+  // guarantees "one shared application record per unique job" even when
+  // the mock provider mints a brand-new synthetic job.id on every fetch.
+  // jobId match and the legacy title+company+location+source composite
+  // are kept only as fallbacks for older records that predate jobKey.
+  const existing = (jobKey && sampleApplications.find(app => app.jobKey === jobKey))
+    || sampleApplications.find(app => app.jobId === job.id)
+    || sampleApplications.find(app => app.jobTitle === (job.jobTitle || job.title) && app.company === job.company && app.location === job.location && app.source === job.source);
+  const application = existing || createApplicationRecord(job, status, { ...extra, runId: extra.runId || job.runId || currentRunId, jobKey });
   const applicationUrl = sanitizeExternalUrl(extra.applicationUrl || extra.applyUrl || job.applicationUrl || job.applyUrl || application.applicationUrl || '');
   const applyUrl = sanitizeExternalUrl(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || application.applyUrl || applicationUrl);
   const normalized = normalizeApplicationRecord({
     ...application,
     jobId: job.id,
+    jobKey: application.jobKey || jobKey,
+    // runId is set ONCE, at creation, and never overwritten by later
+    // status changes (retries on an older run's application must not be
+    // silently re-attributed to whatever run happens to be active now).
+    runId: application.runId || extra.runId || job.runId || currentRunId,
     jobTitle: job.jobTitle || job.title,
     company: job.company,
     location: job.location,
@@ -1481,6 +1670,7 @@ function persistApplication(job, status, extra = {}) {
     matchScore: Number(job.matchScore) || application.matchScore || 0,
     date: application.date || new Date().toISOString().slice(0, 10),
     status,
+    finalStatus: status,
     coverLetter: extra.coverLetter !== undefined ? extra.coverLetter : (application.coverLetter || (profileState.autoCover ? createCoverLetter(job) : '')),
     manualReviewRequired: extra.manualReviewRequired !== undefined ? extra.manualReviewRequired : Boolean(application.manualReviewRequired),
     skipReason: extra.skipReason || application.skipReason || '',
@@ -1501,6 +1691,10 @@ function persistApplication(job, status, extra = {}) {
   }, job);
   if (!existing) { sampleApplications.unshift(normalized); }
   else { const index = sampleApplications.indexOf(existing); if (index > -1) { sampleApplications.splice(index, 1); sampleApplications.unshift(normalized); } }
+  // Keep the current-run summary in sync with this exact status write —
+  // the single place every status change (initial apply, retry, resume,
+  // mark completed/failed, skip) ultimately funnels through.
+  updateRunStatsForApplication(normalized, status);
   saveAppState();
   syncApplicationViews();
   return normalized;
@@ -1676,21 +1870,30 @@ async function runQueueLoop(startIndex, ctx) {
    Rule #4: exact toast text required.
    Rule #7: n18 and n19 are never simultaneously active. */
 async function completeScanCycle(pauseInfo) {
-  const stats = computeDashboardStats();
-  /* Single timestamp captured once for this scan-completion event, reused
-     across the toast/summary/activity/notification for this cycle instead
-     of being re-generated in each place. */
-  const completedAt = new Date().toISOString();
-  const summaryText = `Jobs Found: ${stats.jobsFound} • Jobs Matched: ${stats.jobsMatched} • Applications Sent: ${stats.applicationsSent} • Success: ${stats.successful} • Manual Action Needed: ${stats.pendingReviews} • Temporary Failure: ${stats.temporaryFailures} • Permanent Failure: ${stats.permanentFailures} • Skipped: ${stats.skipped} • Completed At: ${formatDateTime(completedAt)}`;
+  /* AUDIT FIX (run summary): the Workflow Completed modal must reflect
+     ONLY the run that just finished — never cumulative history. Every
+     application written during this run updated currentRunStats in
+     place (via persistApplication -> updateRunStatsForApplication), so
+     it's already correct here; we just need to stamp completedAt.
+     Dashboard/Analytics are untouched and keep using
+     computeDashboardStats() for their all-time totals. */
+  currentRunStats.completedAt = new Date().toISOString();
+  const stats = currentRunStats;
+  const completedAt = stats.completedAt;
+  // "Manual Action Needed" line preserves the modal's original combined
+  // meaning (Pending Review + Manual Action Needed) while the underlying
+  // currentRunStats keeps the two as separate, correctly-scoped buckets.
+  const manualActionDisplay = stats.manualActionNeeded + stats.pendingReview;
+  const summaryText = `Jobs Found: ${stats.jobsFound} • Jobs Matched: ${stats.jobsMatched} • Applications Sent: ${stats.applicationsSent} • Success: ${stats.success} • Manual Action Needed: ${manualActionDisplay} • Temporary Failure: ${stats.temporaryFailure} • Permanent Failure: ${stats.permanentFailure} • Skipped: ${stats.skipped} • Completed At: ${formatDateTime(completedAt)}`;
   const summaryHtml = `
     <div style="display:grid;gap:12px;">
       <p><strong>Jobs Found:</strong> ${stats.jobsFound}</p>
       <p><strong>Jobs Matched:</strong> ${stats.jobsMatched}</p>
       <p><strong>Applications Sent:</strong> ${stats.applicationsSent}</p>
-      <p><strong>Success:</strong> ${stats.successful}</p>
-      <p><strong>Manual Action Needed:</strong> ${stats.pendingReviews}</p>
-      <p><strong>Temporary Failure:</strong> ${stats.temporaryFailures}</p>
-      <p><strong>Permanent Failure:</strong> ${stats.permanentFailures}</p>
+      <p><strong>Success:</strong> ${stats.success}</p>
+      <p><strong>Manual Action Needed:</strong> ${manualActionDisplay}</p>
+      <p><strong>Temporary Failure:</strong> ${stats.temporaryFailure}</p>
+      <p><strong>Permanent Failure:</strong> ${stats.permanentFailure}</p>
       <p><strong>Skipped:</strong> ${stats.skipped}</p>
       <p><strong>Completed At:</strong> ${formatDateTime(completedAt)}</p>
     </div>
@@ -1937,6 +2140,10 @@ async function runWorkflow() {
   workflowRunId++;
   const thisRunId = workflowRunId; // local snapshot for closure checks inside this run
   workflowRunning = true;
+  // Fresh currentRunStats + a new runId for every application created
+  // from this point on — this is what makes the "Workflow Completed"
+  // modal show only this run's numbers instead of all-time totals.
+  startNewRun();
   setWorkflowState('running');
   setActivePage('workflow');
 
@@ -1983,11 +2190,34 @@ async function runWorkflow() {
     await highlightNode('n3');
 
     // ---- Remove Duplicates (n4) ----
-    await highlightNode('n4', filteredJobs.length ? 'completed' : 'skipped');
+    // AUDIT FIX (duplicate jobs): compute a stable jobKey for every job and
+    // drop duplicates BEFORE the AI Match Jobs step (#14), both within this
+    // fetch batch and against every job already represented among stored
+    // applications (any status: previously applied, Pending Review, Manual
+    // Action Needed, or a prior duplicate-skip) — so repeated scheduled
+    // scans never resubmit the same company + title + source combination.
+    const existingJobKeys = buildExistingJobKeySet();
+    const seenThisBatch = new Set();
+    const uniqueBatchJobs = [];
+    filteredJobs.forEach(job => {
+      const jobKey = computeJobKey(job);
+      if (seenThisBatch.has(jobKey)) return; // exact duplicate within this single fetch — drop silently
+      seenThisBatch.add(jobKey);
+      uniqueBatchJobs.push({ ...job, jobKey, runId: currentRunId });
+    });
+    const newJobs = [];
+    const duplicateJobs = [];
+    uniqueBatchJobs.forEach(job => {
+      if (existingJobKeys.has(job.jobKey)) duplicateJobs.push(job);
+      else newJobs.push(job);
+    });
+    await highlightNode('n4', uniqueBatchJobs.length ? 'completed' : 'skipped');
 
     // ---- AI Match Jobs / Calculate Match Score (n5, n6) ----
+    // Only genuinely new jobs are scored/matched — duplicates never reach
+    // the matcher or the submission queue (#12, #13).
     const threshold = Number(profileState.minMatchScore || 75);
-    const scoredJobs = filteredJobs.map(job => {
+    const scoredJobs = newJobs.map(job => {
       const matchScore = computeJobMatchScore(job);
       return {
         ...job,
@@ -1997,13 +2227,30 @@ async function runWorkflow() {
         workflowFinalStatus: 'found'
       };
     });
-    jobsData = scoredJobs;
+    jobsData = scoredJobs.concat(duplicateJobs);
     appState.jobs = jobsData;
     saveAppState();
-    addActivity(`${scoredJobs.length} jobs were discovered.`);
-    addNotification('Job Found', `${scoredJobs.length} jobs were discovered.`);
+    currentRunStats.jobsFound = uniqueBatchJobs.length;
+    addActivity(`${uniqueBatchJobs.length} jobs were discovered.`);
+    addNotification('Job Found', `${uniqueBatchJobs.length} jobs were discovered.`);
     await highlightNode('n5');
     await highlightNode('n6');
+
+    // Duplicates are recorded (once) as Skipped and never touch the
+    // matching/submission pipeline — this is what keeps Applications Sent
+    // from inflating and stops the same job being retried run after run.
+    // NOTE: persistApplication() re-uses the ORIGINAL application record
+    // for a duplicate jobKey (correctly preserving that record's own
+    // runId/history), so updateRunStatsForApplication() won't attribute
+    // the event to *this* run's stats. The duplicate-skip itself is still
+    // something that genuinely happened during this run's scan, so it's
+    // counted into currentRunStats.skipped directly here.
+    duplicateJobs.forEach(job => {
+      job.workflowStatus = 'Skipped';
+      job.workflowFinalStatus = 'skipped';
+      persistApplication(job, 'Skipped', { skipReason: 'Duplicate or previously processed job.', notes: 'Duplicate or previously processed job.' });
+      currentRunStats.skipped += 1;
+    });
 
     // ---- Match Score Above Threshold? (d7) — single decision for the whole batch ----
     const matchedJobs = scoredJobs.filter(job => job.matched);
@@ -2015,10 +2262,12 @@ async function runWorkflow() {
       job.workflowFinalStatus = 'skipped';
       persistApplication(job, 'Skipped', { skipReason: 'Match score below threshold', notes: 'Skipped because the match score was below the configured threshold.' });
     });
-    if (belowThresholdJobs.length) {
+    if (belowThresholdJobs.length || duplicateJobs.length) {
       await executeWorkflowNode(null, 'skip', 'skipped', 'completed');
       await executeWorkflowNode(null, 'n18', 'completed', 'completed');
     }
+
+    currentRunStats.jobsMatched = matchedJobs.length;
 
     if (!matchedJobs.length) {
       markWorkflowNodesSkipped(['n8', 'n9', 'n10', 'n11', 'n12', 'd13', 'n14', 'd15', 'success', 'tempfail', 'manual', 'permfail', 'st-success', 'st-temp', 'st-manual', 'st-perm', 'n16', 'n17', 'pending']);
