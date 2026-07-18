@@ -3160,8 +3160,13 @@ function renderApplicationsTable() {
   }).sort((a, b) => {
     let left = a[sortBy];
     let right = b[sortBy];
+    /* Sort by the full timestamp actually shown in the Date column
+       (createdAt, falling back to dateTime/date) instead of the short
+       date-only field, so same-day applications sort in the true order
+       they were created — matching what the user sees on screen. */
     if (sortBy === 'date') {
-      left = new Date(left); right = new Date(right);
+      left = new Date(a.createdAt || a.dateTime || a.date);
+      right = new Date(b.createdAt || b.dateTime || b.date);
     }
     if (left < right) return sortOrder === 'asc' ? -1 : 1;
     if (left > right) return sortOrder === 'asc' ? 1 : -1;
@@ -3185,7 +3190,10 @@ function renderApplicationsTable() {
       `;
     } else if (a.status === 'Temporary Failure') {
       const retryDisabled = (a.retryCount || 0) >= MAX_RETRY_COUNT;
-      reviewButtons = `<button type="button" class="apps-action-btn" data-action="retry-application" data-app-id="${a.id}" ${retryDisabled ? 'disabled title="Retry limit reached"' : ''}>Retry (${a.retryCount || 0}/${MAX_RETRY_COUNT})</button>`;
+      reviewButtons = `
+        <button type="button" class="apps-action-btn" data-action="view-application" data-app-id="${a.id}">View</button>
+        <button type="button" class="apps-action-btn" data-action="retry-application" data-app-id="${a.id}" ${retryDisabled ? 'disabled title="Retry limit reached"' : ''}>Retry (${a.retryCount || 0}/${MAX_RETRY_COUNT})</button>
+      `;
     }
     return `<tr>
       <td data-label="Job Title">${escapeHtml(a.jobTitle)}</td>
