@@ -482,8 +482,9 @@ function normalizeApplicationRecord(input = {}, fallbackJob = null) {
   const experienceLevel = fallbackText(source.experienceLevel || source.experience || fallback.experienceLevel || fallback.experience || 'Mid Level', 'Mid Level');
   const rawDateValue = source.date || source.postedDate || source.createdAt || source.dateTime || fallback.date || fallback.postedDate || new Date().toISOString();
   const parsedDate = new Date(rawDateValue);
-  const dateValue = !Number.isNaN(parsedDate) ? parsedDate.toISOString().slice(0, 10) : fallbackText(String(rawDateValue || '').slice(0, 10), new Date().toISOString().slice(0, 10));
-  const timeValue = fallbackText(source.time || source.createdTime || (source.dateTime && String(source.dateTime).split(' ').slice(1).join(' ') || ''), parsedDate && !Number.isNaN(parsedDate) ? parsedDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }));
+  const hasValidDate = parsedDate instanceof Date && !Number.isNaN(parsedDate.getTime());
+  const dateValue = hasValidDate ? parsedDate.toISOString().slice(0, 10) : fallbackText(String(rawDateValue || '').slice(0, 10), new Date().toISOString().slice(0, 10));
+  const timeValue = fallbackText(source.time || source.createdTime || (source.dateTime && String(source.dateTime).split(' ').slice(1).join(' ') || ''), hasValidDate ? parsedDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }));
   const dateTimeValue = fallbackText(source.dateTime || `${dateValue} ${timeValue}`, `${dateValue} ${timeValue}`);
   const matchScoreValue = Number.isFinite(Number(source.matchScore ?? fallback.matchScore ?? 0)) ? Number(source.matchScore ?? fallback.matchScore ?? 0) : 0;
   let statusValue = fallbackText(source.status || fallback.status || 'Pending Review', 'Pending Review');
@@ -586,13 +587,13 @@ function runConsistencyCheck() {
   // 2) Every application has exactly one valid final status + sanitized URLs (defensive re-normalize).
   sampleApplications = sampleApplications.map(app => normalizeApplicationRecord(app));
 
-  // 3) Notifications: no duplicates (same title + message), keep newest-first order.
+  // 3) Notifications: no duplicates by application/status/run identity, keep newest-first order.
   if (Array.isArray(appState.notifications) && appState.notifications.length) {
     const seen = new Set();
     const deduped = [];
     appState.notifications.forEach(n => {
       if (!n) return;
-      const key = `${n.title}::${n.message}`;
+      const key = `${n.applicationId || ''}::${n.status || ''}::${n.runId || ''}::${n.title || ''}::${n.message || ''}`;
       if (seen.has(key)) return;
       seen.add(key);
       deduped.push(n);
@@ -695,14 +696,26 @@ function addActivity(message) {
 /* AUDIT FIX #8 — only the seven allowed notification titles may be raised,
    and addNotification is the single choke point that guarantees no exact
    duplicate (same title + message) is ever stored twice. */
-function addNotification(title, message) {
+function addNotification(title, message, meta = {}) {
   const normalizedTitle = String(title || '').trim();
   const normalizedMessage = String(message || '').trim();
   if (!normalizedTitle || !normalizedMessage) return;
   if (!ALLOWED_NOTIFICATION_TITLES.has(normalizedTitle)) return; // reject anything outside the allowed event list
-  const duplicate = appState.notifications.some(note => note.title === normalizedTitle && note.message === normalizedMessage);
+  const applicationId = String(meta.applicationId || '').trim();
+  const status = String(meta.status || '').trim();
+  const runId = String(meta.runId || '').trim();
+  const duplicate = appState.notifications.some(note => {
+    const noteApplicationId = String(note.applicationId || '').trim();
+    const noteStatus = String(note.status || '').trim();
+    const noteRunId = String(note.runId || '').trim();
+    const hasIdentity = applicationId || status || runId || noteApplicationId || noteStatus || noteRunId;
+    if (hasIdentity) {
+      return noteApplicationId === applicationId && noteStatus === status && noteRunId === runId;
+    }
+    return note.title === normalizedTitle && note.message === normalizedMessage;
+  });
   if (duplicate) return;
-  appState.notifications.unshift({ id: Date.now(), title: normalizedTitle, message: normalizedMessage, date: new Date().toISOString(), read: false });
+  appState.notifications.unshift({ id: Date.now(), title: normalizedTitle, message: normalizedMessage, date: new Date().toISOString(), read: false, applicationId, status, runId });
   if (appState.notifications.length > 50) appState.notifications.length = 50;
   saveAppState();
   syncWorkflowUi();
@@ -1208,8 +1221,8 @@ function updateRunStatsForApplication(app, newStatus) {
 
   // "Applications Sent" = unique applications that reached a real submission
   // attempt (i.e. not Skipped) this run — tracked once per app, not per event.
-  const wasCountedAsSent = Boolean(prevKey) && prevKey !== 'skipped';
-  const isCountedAsSent = Boolean(newKey) && newKey !== 'skipped';
+  const wasCountedAsSent = Boolean(prevKey) && ['success', 'temporaryFailure', 'permanentFailure'].includes(prevKey);
+  const isCountedAsSent = Boolean(newKey) && ['success', 'temporaryFailure', 'permanentFailure'].includes(newKey);
   if (isCountedAsSent && !wasCountedAsSent) currentRunStats.applicationsSent += 1;
   if (!isCountedAsSent && wasCountedAsSent) currentRunStats.applicationsSent = Math.max(0, currentRunStats.applicationsSent - 1);
 
@@ -1232,15 +1245,32 @@ function normalizeForKey(value) {
 
 function computeJobKey(job) {
   if (!job) return '';
-  // A genuinely stable provider id/url (not the mock's per-fetch random id)
-  // takes priority when present.
-  const stableProviderId = job.stableProviderId || job.externalId || job.providerJobId || '';
+  const providerJobId = normalizeForKey(job.providerJobId || job.stableProviderId || job.externalId || '');
   const originalUrl = normalizeForKey(job.originalJobUrl || job.applicationUrl || job.applyUrl || '');
   const company = normalizeForKey(job.company);
   const title = normalizeForKey(job.jobTitle || job.title);
-  const source = normalizeForKey(job.source);
-  if (stableProviderId) return `pid:${normalizeForKey(stableProviderId)}`;
-  return `key:${company}|${title}|${source}|${originalUrl}`;
+  const location = normalizeForKey(job.location);
+  if (providerJobId) return `pid:${providerJobId}`;
+  if (originalUrl) return `url:${originalUrl}`;
+  return `key:${company}|${title}|${location}`;
+}
+
+function findExistingApplicationForJob(job) {
+  if (!job) return null;
+  const jobKey = (job && (job.jobKey || computeJobKey(job))) || '';
+  return (jobKey && sampleApplications.find(app => app.jobKey === jobKey))
+    || sampleApplications.find(app => app.jobId === job.id)
+    || sampleApplications.find(app => app.jobTitle === (job.jobTitle || job.title) && app.company === job.company && app.location === job.location && app.source === job.source);
+}
+
+function getTodaySubmittedApplicationsCount(apps = sampleApplications) {
+  const todayKey = new Date().toISOString().slice(0, 10);
+  return (apps || []).filter(app => {
+    if (!app || !app.submittedAt) return false;
+    const submittedAt = new Date(app.submittedAt);
+    if (!(submittedAt instanceof Date) || Number.isNaN(submittedAt.getTime())) return false;
+    return submittedAt.toISOString().slice(0, 10) === todayKey;
+  }).length;
 }
 
 /* Builds the set of jobKeys that already exist among stored applications
@@ -1354,7 +1384,7 @@ async function executeWorkflowNode(job, id, state, status = 'completed', duratio
 }
 
 function getWorkflowJobKey(job) {
-  return `${job.jobTitle || ''}|${job.company || ''}|${job.location || ''}`;
+  return computeJobKey(job) || `${job.jobTitle || ''}|${job.company || ''}|${job.location || ''}`;
 }
 
 function validateProfileForWorkflow() {
@@ -1414,8 +1444,8 @@ function computeJobMatchScore(job) {
 function filterUniqueJobs(jobs) {
   const seen = new Set();
   return jobs.filter(job => {
-    const key = `${job.jobTitle}|${job.company}|${job.location}`;
-    if (seen.has(key)) return false;
+    const key = computeJobKey(job);
+    if (!key || seen.has(key)) return false;
     seen.add(key);
     return true;
   });
@@ -1539,36 +1569,36 @@ async function applyOutcomeToApplication(job, outcome, opts = {}) {
       job.workflowStatus = 'Success';
       job.workflowFinalStatus = 'success';
       extra = { confirmationMessage: 'Application submitted successfully.', submittedAt: new Date().toISOString(), failureReason: '', manualActionReason: '', ...opts.extra };
-      persistApplication(job, finalStatus, extra);
+      const successApplication = persistApplication(job, finalStatus, extra);
       addActivity(`Application succeeded for ${job.jobTitle || job.title} at ${job.company}.`);
-      addNotification('Application Submitted', `${job.jobTitle || job.title} at ${job.company} was submitted successfully.`);
+      addNotification('Application Submitted', `${job.jobTitle || job.title} at ${job.company} was submitted successfully.`, { applicationId: successApplication.applicationId || successApplication.id, status: finalStatus, runId: successApplication.runId || currentRunId || job.runId || null });
       break;
     case 'temporary_failure':
       finalStatus = 'Temporary Failure';
       job.workflowStatus = 'Temporary Failure';
       job.workflowFinalStatus = 'temporary_failure';
-      extra = { failureReason: opts.failureReason || pickReason(TEMP_FAILURE_REASONS), retryCount: (opts.retryCount ?? job.retryCount ?? 0), nextRetryAt: new Date().toISOString(), ...opts.extra };
-      persistApplication(job, finalStatus, extra);
+      extra = { failureReason: opts.failureReason || pickReason(TEMP_FAILURE_REASONS), retryCount: (opts.retryCount ?? job.retryCount ?? 0), nextRetryAt: new Date().toISOString(), submittedAt: new Date().toISOString(), ...opts.extra };
+      const tempFailureApplication = persistApplication(job, finalStatus, extra);
       addActivity(`Application temporarily failed for ${job.jobTitle || job.title} at ${job.company}.`);
-      addNotification('Temporary Failure', `${job.jobTitle || job.title} at ${job.company} needs another attempt.`);
+      addNotification('Temporary Failure', `${job.jobTitle || job.title} at ${job.company} needs another attempt.`, { applicationId: tempFailureApplication.applicationId || tempFailureApplication.id, status: finalStatus, runId: tempFailureApplication.runId || currentRunId || job.runId || null });
       break;
     case 'manual_action_needed':
       finalStatus = 'Manual Action Needed';
       job.workflowStatus = 'Manual Action Needed';
       job.workflowFinalStatus = 'manual_action_needed';
       extra = { manualReviewRequired: true, failureReason: 'Manual action required.', manualActionReason: pickManualActionReason(job), ...opts.extra };
-      persistApplication(job, finalStatus, extra);
+      const manualApplication = persistApplication(job, finalStatus, extra);
       addActivity(`Manual action required for ${job.jobTitle || job.title} at ${job.company}.`);
-      addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`);
+      addNotification('Manual Action Needed', `${job.jobTitle || job.title} at ${job.company} requires manual completion before submission.`, { applicationId: manualApplication.applicationId || manualApplication.id, status: finalStatus, runId: manualApplication.runId || currentRunId || job.runId || null });
       break;
     case 'permanent_failure':
       finalStatus = 'Permanent Failure';
       job.workflowStatus = 'Permanent Failure';
       job.workflowFinalStatus = 'permanent_failure';
-      extra = { failureReason: opts.failureReason || pickReason(PERM_FAILURE_REASONS), manualActionReason: '', ...opts.extra };
-      persistApplication(job, finalStatus, extra);
+      extra = { failureReason: opts.failureReason || pickReason(PERM_FAILURE_REASONS), manualActionReason: '', submittedAt: new Date().toISOString(), ...opts.extra };
+      const permanentFailureApplication = persistApplication(job, finalStatus, extra);
       addActivity(`Application permanently failed for ${job.jobTitle || job.title} at ${job.company}.`);
-      addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted. No further retries will be attempted.`);
+      addNotification('Permanent Failure', `${job.jobTitle || job.title} at ${job.company} could not be submitted. No further retries will be attempted.`, { applicationId: permanentFailureApplication.applicationId || permanentFailureApplication.id, status: finalStatus, runId: permanentFailureApplication.runId || currentRunId || job.runId || null });
       break;
     default:
       throw new Error('Unknown submission result: ' + outcome);
@@ -1822,6 +1852,13 @@ async function runQueueLoop(startIndex, ctx) {
     const job = (appState.jobs || []).find(entry => entry.id === queueEntry.jobId);
     if (!job) { queueEntry.status = 'completed'; continue; }
 
+    const existingApp = findExistingApplicationForJob(job);
+    if (existingApp) {
+      console.log(`[Workflow] Ignored duplicate job ${job.jobTitle || job.title} at ${job.company}; existing application ${existingApp.id} preserved (${existingApp.status}).`);
+      queueEntry.status = 'completed';
+      continue;
+    }
+
     if (ctx.applicationsCount >= ctx.dailyLimit) {
       // Rule #2: n19 must NEVER activate while jobs remain in queue.
       // completeScanCycle() will handle n19 activation once all jobs are done.
@@ -1899,7 +1936,11 @@ async function completeScanCycle(pauseInfo) {
     </div>
   `;
 
-  if (!pauseInfo || !pauseInfo.paused || pauseInfo.reason === 'daily_limit') {
+  const queueEntries = Array.isArray(workflowState.queue) ? workflowState.queue : [];
+  const hasRemainingWork = queueEntries.some(entry => entry && entry.status && entry.status !== 'completed');
+  const shouldActivateNextScan = !workflowPaused && !workflowStopped && (!pauseInfo || (!pauseInfo.paused && !pauseInfo.reason)) && !hasRemainingWork;
+
+  if (shouldActivateNextScan) {
     // Step 1 — Deactivate n18 (Process Next Job): mark it completed so it stops glowing.
     // This prevents n18 and n19 from ever being simultaneously active (Rule #7).
     markWorkflowNode('n18', 'completed');
@@ -1907,7 +1948,7 @@ async function completeScanCycle(pauseInfo) {
     // Step 2 — Display the workflow summary using existing mechanisms only.
     // openModal() is a floating overlay — it does NOT add a new workflow node.
     addActivity(`Workflow completed. ${summaryText}`);
-    addNotification('Workflow Completed', summaryText);
+    addNotification('Workflow Completed', summaryText, { runId: currentRunId || workflowRunId || null });
     openModal('Workflow Completed', summaryHtml);
 
     // Step 3 — Activate n19 (Wait For Next Scan) only after queue is exhausted (Rule #2 & #3).
@@ -1918,8 +1959,12 @@ async function completeScanCycle(pauseInfo) {
 
     scanWaiting = true;
     workflowState.currentStatus = 'completed';
-    workflowState.pauseReason = pauseInfo && pauseInfo.reason === 'daily_limit' ? 'daily_limit' : 'next_scan';
-    setWorkflowState('paused', { pauseReason: workflowState.pauseReason });
+    workflowState.pauseReason = 'next_scan';
+    setWorkflowState('paused', { pauseReason: workflowState.pauseReason, currentStatus: workflowState.currentStatus });
+  } else {
+    workflowState.currentStatus = pauseInfo && pauseInfo.reason === 'daily_limit' ? 'paused' : workflowState.currentStatus;
+    workflowState.pauseReason = pauseInfo && pauseInfo.reason === 'daily_limit' ? 'daily_limit' : workflowState.pauseReason;
+    setWorkflowState('paused', { pauseReason: workflowState.pauseReason, currentStatus: workflowState.currentStatus });
   }
 
   const check = runConsistencyCheck();
@@ -1956,10 +2001,10 @@ async function processRemainingWorkflowQueue(afterJobId) {
     if (startIndex === -1) return;
 
     const ctx = {
-      existingJobKeys: new Set(sampleApplications.filter(a => a.status !== 'Skipped').map(a => `${a.jobTitle}|${a.company}|${a.location}`)),
+      existingJobKeys: new Set(sampleApplications.filter(a => a.status !== 'Skipped').map(a => a.jobKey || computeJobKey(a))),
       blacklistedCompanies: new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v => v.toLowerCase())),
       dailyLimit: Number(profileState.dailyLimit) || 30,
-      applicationsCount: sampleApplications.filter(a => ['Success', 'Temporary Failure', 'Permanent Failure'].includes(a.status)).length,
+      applicationsCount: getTodaySubmittedApplicationsCount(sampleApplications),
       completedJobs: 0
     };
 
@@ -2232,7 +2277,7 @@ async function runWorkflow() {
     saveAppState();
     currentRunStats.jobsFound = uniqueBatchJobs.length;
     addActivity(`${uniqueBatchJobs.length} jobs were discovered.`);
-    addNotification('Job Found', `${uniqueBatchJobs.length} jobs were discovered.`);
+    addNotification('Job Found', `${uniqueBatchJobs.length} jobs were discovered.`, { runId: currentRunId || workflowRunId || null });
     await highlightNode('n5');
     await highlightNode('n6');
 
@@ -2246,9 +2291,14 @@ async function runWorkflow() {
     // something that genuinely happened during this run's scan, so it's
     // counted into currentRunStats.skipped directly here.
     duplicateJobs.forEach(job => {
-      job.workflowStatus = 'Skipped';
-      job.workflowFinalStatus = 'skipped';
-      persistApplication(job, 'Skipped', { skipReason: 'Duplicate or previously processed job.', notes: 'Duplicate or previously processed job.' });
+      const existingApp = findExistingApplicationForJob(job);
+      if (existingApp) {
+        console.log(`[Workflow] Ignored duplicate job ${job.jobTitle || job.title} at ${job.company}; existing application ${existingApp.id} preserved (${existingApp.status}).`);
+      } else {
+        job.workflowStatus = 'Skipped';
+        job.workflowFinalStatus = 'skipped';
+        persistApplication(job, 'Skipped', { skipReason: 'Duplicate or previously processed job.', notes: 'Duplicate or previously processed job.' });
+      }
       currentRunStats.skipped += 1;
     });
 
@@ -2258,9 +2308,14 @@ async function runWorkflow() {
     await executeWorkflowNode(null, 'd7', 'matching', matchedJobs.length ? 'completed' : 'skipped');
 
     belowThresholdJobs.forEach(job => {
-      job.workflowStatus = 'Skipped';
-      job.workflowFinalStatus = 'skipped';
-      persistApplication(job, 'Skipped', { skipReason: 'Match score below threshold', notes: 'Skipped because the match score was below the configured threshold.' });
+      const existingApp = findExistingApplicationForJob(job);
+      if (existingApp) {
+        console.log(`[Workflow] Ignored below-threshold job ${job.jobTitle || job.title} at ${job.company}; existing application ${existingApp.id} preserved (${existingApp.status}).`);
+      } else {
+        job.workflowStatus = 'Skipped';
+        job.workflowFinalStatus = 'skipped';
+        persistApplication(job, 'Skipped', { skipReason: 'Match score below threshold', notes: 'Skipped because the match score was below the configured threshold.' });
+      }
     });
     if (belowThresholdJobs.length || duplicateJobs.length) {
       await executeWorkflowNode(null, 'skip', 'skipped', 'completed');
@@ -2271,12 +2326,12 @@ async function runWorkflow() {
 
     if (!matchedJobs.length) {
       markWorkflowNodesSkipped(['n8', 'n9', 'n10', 'n11', 'n12', 'd13', 'n14', 'd15', 'success', 'tempfail', 'manual', 'permfail', 'st-success', 'st-temp', 'st-manual', 'st-perm', 'n16', 'n17', 'pending']);
-      addNotification('Jobs Matched', '0 jobs matched your configured threshold.');
+      addNotification('Jobs Matched', '0 jobs matched your configured threshold.', { runId: currentRunId || workflowRunId || null });
       await completeScanCycle({ paused: false });
       return;
     }
 
-    addNotification('Jobs Matched', `${matchedJobs.length} jobs matched your configured threshold.`);
+    addNotification('Jobs Matched', `${matchedJobs.length} jobs matched your configured threshold.`, { runId: currentRunId || workflowRunId || null });
 
     workflowState.queue = matchedJobs.map(job => ({
       id: job.id,
@@ -2295,10 +2350,10 @@ async function runWorkflow() {
     saveAppState();
 
     const ctx = {
-      existingJobKeys: new Set(sampleApplications.filter(a => a.status !== 'Skipped').map(a => `${a.jobTitle}|${a.company}|${a.location}`)),
+      existingJobKeys: new Set(sampleApplications.filter(a => a.status !== 'Skipped').map(a => a.jobKey || computeJobKey(a))),
       blacklistedCompanies: new Set(normalizeArrayString(profileState.blacklistedCompanies || '').map(v => v.toLowerCase())),
       dailyLimit: Number(profileState.dailyLimit) || 30,
-      applicationsCount: sampleApplications.filter(a => ['Success', 'Temporary Failure', 'Permanent Failure'].includes(a.status)).length,
+      applicationsCount: getTodaySubmittedApplicationsCount(sampleApplications),
       completedJobs: 0
     };
 
@@ -2704,7 +2759,7 @@ function formatBytes(bytes) {
 function formatDateTime(iso) {
   if (!iso) return '—';
   const date = new Date(iso);
-  if (isNaN(date)) return '—';
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '—';
   return date.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
