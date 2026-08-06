@@ -878,6 +878,7 @@
     white-space:nowrap;
   }
   .profile-last-updated-icon{font-size:13px;}
+  .dashboard-date-filter{width:auto;min-width:150px;padding:7px 10px;}
   .profile-save-btn{
     border:none;
     border-radius:12px;
