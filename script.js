@@ -257,6 +257,9 @@ function renderConnectors() {
 }
 renderConnectors();
 
+/* Ensure selectedNodeId is declared before any listeners may call selectNode() */
+/* selectedNodeId moved earlier to avoid TDZ */
+
 /* ---------------- drag nodes ---------------- */
 let dragModeOn = false;
 const dragModeBtn = document.getElementById('dragmode');
@@ -2455,6 +2458,8 @@ function loadMoreApplications() {
   showToast('More applications loaded.');
 }
 
+/* Declare dashboardDateFilterValue BEFORE loading appState to avoid TDZ */
+let dashboardDateFilterValue;
 let appState = loadAppState();
 dashboardDateFilterValue = appState.dashboardDateFilter || getTodayLocalDateKey();
 let allSettings = appState.workflowSettings || {};
@@ -2632,7 +2637,7 @@ const pageContainers = {
   analytics: document.getElementById('analyticsPage'),
 };
 
-let selectedNodeId = null;
+/* selectedNodeId declared earlier near connector setup to avoid TDZ */
 
 function setActivePage(page) {
   if (!pageContainers[page]) page = 'workflow';
@@ -3414,7 +3419,6 @@ function handleDashboardDateFilterChange() {
   }
 }
 
-let dashboardDateFilterValue = getTodayLocalDateKey();
 
 function getDashboardFilteredData() {
   const selectedDateKey = dashboardDateFilterValue || getTodayLocalDateKey();
