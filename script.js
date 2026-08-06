@@ -258,7 +258,7 @@ function renderConnectors() {
 renderConnectors();
 
 /* Ensure selectedNodeId is declared before any listeners may call selectNode() */
-/* selectedNodeId moved earlier to avoid TDZ */
+let selectedNodeId = null;
 
 /* ---------------- drag nodes ---------------- */
 let dragModeOn = false;
