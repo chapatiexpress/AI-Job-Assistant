@@ -639,7 +639,8 @@ function loadAppState() {
         jobs: Array.isArray(cleaned.jobs) ? cleaned.jobs.map(job => normalizeApplicationRecord(job, job)) : DEFAULT_APP_STATE.jobs.slice(),
         applications: Array.isArray(cleaned.applications) ? cleaned.applications.map(app => normalizeApplicationRecord(app)) : DEFAULT_APP_STATE.applications.slice(),
         settings: { ...DEFAULT_APP_STATE.settings, ...(cleaned.settings || {}) },
-        lastUpdatedAt: cleaned.lastUpdatedAt || null
+        lastUpdatedAt: cleaned.lastUpdatedAt || null,
+        dashboardDateFilter: cleaned.dashboardDateFilter || getTodayLocalDateKey()
       };
     }
   } catch (e) { }
@@ -673,6 +674,7 @@ function saveAppState() {
   appState.jobs = (jobsData || []).map(job => normalizeApplicationRecord(job, job));
   appState.applications = (Array.isArray(sampleApplications) ? sampleApplications : []).map(app => normalizeApplicationRecord(app));
   sampleApplications = appState.applications; // single source of truth: same array reference everywhere
+  appState.dashboardDateFilter = dashboardDateFilterValue || getTodayLocalDateKey();
   if (!appState.notifications) appState.notifications = [];
   if (!appState.activity) appState.activity = [];
   /* Single point where the app's "last updated" timestamp is captured — generated
@@ -1264,12 +1266,10 @@ function findExistingApplicationForJob(job) {
 }
 
 function getTodaySubmittedApplicationsCount(apps = sampleApplications) {
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = getTodayLocalDateKey();
   return (apps || []).filter(app => {
-    if (!app || !app.submittedAt) return false;
-    const submittedAt = new Date(app.submittedAt);
-    if (!(submittedAt instanceof Date) || Number.isNaN(submittedAt.getTime())) return false;
-    return submittedAt.toISOString().slice(0, 10) === todayKey;
+    if (!app) return false;
+    return getRecordLocalDateKey(app) === todayKey && Boolean(app.submittedAt || app.completedAt || app.createdAt);
   }).length;
 }
 
@@ -1285,6 +1285,23 @@ function buildExistingJobKeySet(excludeAppId) {
     if (key) keys.add(key);
   });
   return keys;
+}
+
+function buildExistingCompanyKeySet(excludeAppId) {
+  const keys = new Set();
+  (sampleApplications || []).forEach(app => {
+    if (excludeAppId !== undefined && app.id === excludeAppId) return;
+    const companyKey = normalizeCompanyName(app.company || '');
+    if (companyKey) keys.add(companyKey);
+  });
+  return keys;
+}
+
+function findExistingApplicationForCompany(job) {
+  if (!job) return null;
+  const companyKey = normalizeCompanyName(job.company || '');
+  if (!companyKey) return null;
+  return (sampleApplications || []).find(app => normalizeCompanyName(app.company || '') === companyKey);
 }
 
 const TEMP_FAILURE_REASONS = [
@@ -1680,6 +1697,13 @@ function persistApplication(job, status, extra = {}) {
   const existing = (jobKey && sampleApplications.find(app => app.jobKey === jobKey))
     || sampleApplications.find(app => app.jobId === job.id)
     || sampleApplications.find(app => app.jobTitle === (job.jobTitle || job.title) && app.company === job.company && app.location === job.location && app.source === job.source);
+  const skipReasonValue = String(extra.skipReason || '').trim();
+  const preserveExistingSkip = status === 'Skipped' && Boolean(existing) && ['Duplicate or previously processed job.', 'Previously applied to this company', 'Match score below threshold', 'Job did not match preferences', 'Blacklisted company', 'Already applied'].includes(skipReasonValue);
+  if (preserveExistingSkip) {
+    saveAppState();
+    syncApplicationViews();
+    return normalizeApplicationRecord(existing);
+  }
   const application = existing || createApplicationRecord(job, status, { ...extra, runId: extra.runId || job.runId || currentRunId, jobKey });
   const applicationUrl = sanitizeExternalUrl(extra.applicationUrl || extra.applyUrl || job.applicationUrl || job.applyUrl || application.applicationUrl || '');
   const applyUrl = sanitizeExternalUrl(extra.applyUrl || extra.applicationUrl || job.applyUrl || job.applicationUrl || application.applyUrl || applicationUrl);
@@ -1773,12 +1797,17 @@ async function runJobPipeline(job, queueEntry, ctx) {
   // Blacklist + duplicate check (n9)
   const isAlreadyApplied = ctx.existingJobKeys.has(jobKey);
   const isBlacklisted = ctx.blacklistedCompanies.has(String(job.company || '').toLowerCase());
-  await executeWorkflowNode(job, 'n9', 'checking_duplicates', (isAlreadyApplied || isBlacklisted) ? 'skipped' : 'completed');
-  if (isAlreadyApplied || isBlacklisted) {
+  const existingCompanyApp = findExistingApplicationForCompany(job);
+  const isPreviouslyAppliedCompany = Boolean(existingCompanyApp);
+  const shouldSkip = isAlreadyApplied || isBlacklisted || isPreviouslyAppliedCompany;
+  const skipReason = isBlacklisted ? 'Blacklisted company' : (isPreviouslyAppliedCompany ? 'Previously applied to this company' : 'Already applied');
+  await executeWorkflowNode(job, 'n9', 'checking_duplicates', shouldSkip ? 'skipped' : 'completed');
+  if (shouldSkip) {
     job.workflowStatus = 'Skipped';
     job.workflowFinalStatus = 'skipped';
-    persistApplication(job, 'Skipped', { skipReason: isBlacklisted ? 'Blacklisted company' : 'Already applied', notes: 'Skipped because the company is blacklisted or the job was already applied to.' });
-    addActivity(`Skipped ${job.jobTitle || job.title} at ${job.company} (${isBlacklisted ? 'blacklisted company' : 'already applied'}).`);
+    persistApplication(job, 'Skipped', { skipReason, notes: 'Skipped because the company is blacklisted or the job was already applied to.' });
+    currentRunStats.skipped += 1;
+    addActivity(`Skipped ${job.jobTitle || job.title} at ${job.company} (${skipReason}).`);
     markWorkflowNodesSkipped(['d15', 'n14', 'success', 'tempfail', 'manual', 'permfail', 'st-success', 'st-temp', 'st-manual', 'st-perm', 'n16', 'n17']);
     await executeWorkflowNode(job, 'skip', 'skipped', 'completed');
     await executeWorkflowNode(job, 'n18', 'completed', 'completed');
@@ -2242,18 +2271,21 @@ async function runWorkflow() {
     // Action Needed, or a prior duplicate-skip) — so repeated scheduled
     // scans never resubmit the same company + title + source combination.
     const existingJobKeys = buildExistingJobKeySet();
+    const existingCompanyKeys = buildExistingCompanyKeySet();
     const seenThisBatch = new Set();
     const uniqueBatchJobs = [];
     filteredJobs.forEach(job => {
       const jobKey = computeJobKey(job);
       if (seenThisBatch.has(jobKey)) return; // exact duplicate within this single fetch — drop silently
       seenThisBatch.add(jobKey);
-      uniqueBatchJobs.push({ ...job, jobKey, runId: currentRunId });
+      uniqueBatchJobs.push({ ...job, jobKey, runId: currentRunId, foundAt: new Date().toISOString() });
     });
     const newJobs = [];
     const duplicateJobs = [];
     uniqueBatchJobs.forEach(job => {
-      if (existingJobKeys.has(job.jobKey)) duplicateJobs.push(job);
+      const companyKey = normalizeCompanyName(job.company || '');
+      const isCompanyDuplicate = Boolean(companyKey && existingCompanyKeys.has(companyKey));
+      if (existingJobKeys.has(job.jobKey) || isCompanyDuplicate) duplicateJobs.push(job);
       else newJobs.push(job);
     });
     await highlightNode('n4', uniqueBatchJobs.length ? 'completed' : 'skipped');
@@ -2424,6 +2456,7 @@ function loadMoreApplications() {
 }
 
 let appState = loadAppState();
+dashboardDateFilterValue = appState.dashboardDateFilter || getTodayLocalDateKey();
 let allSettings = appState.workflowSettings || {};
 let profileState = appState.profile || {};
 let sampleApplications = Array.isArray(appState.applications) ? appState.applications : [];
@@ -3325,9 +3358,73 @@ function daysSince(dateStr) {
   return (Date.now() - d.getTime()) / (1000 * 60 * 60 * 24);
 }
 
+function getLocalDateKeyFromDate(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getTodayLocalDateKey() {
+  return getLocalDateKeyFromDate(new Date());
+}
+
+function getRecordLocalDateKey(record) {
+  const source = record && typeof record === 'object' ? record : {};
+  const candidates = [source.submittedAt, source.completedAt, source.foundAt, source.createdAt, source.timestamp, source.dateTime, source.date, source.postedDate, source.applicationDate, source.updatedAt];
+  for (const value of candidates) {
+    if (!value) continue;
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const parsed = new Date(value);
+    if (parsed instanceof Date && !Number.isNaN(parsed.getTime())) return getLocalDateKeyFromDate(parsed);
+  }
+  if (typeof source.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(source.date)) return source.date;
+  return getTodayLocalDateKey();
+}
+
+function normalizeCompanyName(name) {
+  return String(name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function getDashboardSelectedDateKey() {
+  const inputEl = document.getElementById('dashboardDateFilter');
+  const rawValue = inputEl ? String(inputEl.value || '').trim() : '';
+  if (!rawValue) return getTodayLocalDateKey();
+  const parsed = new Date(rawValue + 'T12:00:00');
+  if (!(parsed instanceof Date) || Number.isNaN(parsed.getTime())) return getTodayLocalDateKey();
+  return getLocalDateKeyFromDate(parsed);
+}
+
+function syncDashboardDateFilterUI() {
+  const inputEl = document.getElementById('dashboardDateFilter');
+  if (!inputEl) return;
+  inputEl.value = dashboardDateFilterValue || getTodayLocalDateKey();
+}
+
+function handleDashboardDateFilterChange() {
+  const nextValue = getDashboardSelectedDateKey();
+  if (nextValue === dashboardDateFilterValue) return;
+  dashboardDateFilterValue = nextValue;
+  if (appState) appState.dashboardDateFilter = dashboardDateFilterValue;
+  saveAppState();
+  renderDashboard();
+  if (dashboardDrawerState.isOpen) {
+    renderDashboardDrawerContent();
+  }
+}
+
+let dashboardDateFilterValue = getTodayLocalDateKey();
+
+function getDashboardFilteredData() {
+  const selectedDateKey = dashboardDateFilterValue || getTodayLocalDateKey();
+  const jobs = (jobsData || appState.jobs || []).map(job => normalizeApplicationRecord(job, job)).filter(job => getRecordLocalDateKey(job) === selectedDateKey);
+  const applications = (sampleApplications || []).map(app => normalizeApplicationRecord(app)).filter(app => getRecordLocalDateKey(app) === selectedDateKey);
+  return { selectedDateKey, jobs, applications };
+}
+
 function computeDashboardStats() {
-  const jobs = (jobsData || appState.jobs || []).map(job => normalizeApplicationRecord(job, job));
-  const applications = (sampleApplications || []).map(app => normalizeApplicationRecord(app));
+  const { jobs, applications } = getDashboardFilteredData();
   const jobsMatchedCount = jobs.filter(job => isMatchedDashboardJob(job)).length;
   const applicationsSentCount = applications.filter(app => isDashboardSubmissionAttempt(app)).length;
   return {
@@ -3351,16 +3448,12 @@ function isMatchedDashboardJob(job) {
 
 function isDashboardSubmissionAttempt(app) {
   const normalized = normalizeApplicationRecord(app);
-  if (['Success', 'Temporary Failure', 'Permanent Failure', 'Submitted'].includes(normalized.status)) return true;
-  if (normalized.status === 'Manual Action Needed') {
-    return Boolean(normalized.submittedAt || normalized.confirmationMessage || normalized.failureReason || normalized.retryCount || normalized.completedAt || normalized.manualActionReason);
-  }
-  return false;
+  if (!['Success', 'Temporary Failure', 'Permanent Failure', 'Submitted'].includes(normalized.status)) return false;
+  return Boolean(normalized.submittedAt || normalized.completedAt || normalized.createdAt || normalized.dateTime || normalized.date);
 }
 
 function getDashboardRecords(category) {
-  const jobs = (jobsData || appState.jobs || []).map(job => normalizeApplicationRecord(job, job));
-  const applications = (sampleApplications || []).map(app => normalizeApplicationRecord(app));
+  const { jobs, applications } = getDashboardFilteredData();
   switch (category) {
     case 'jobsFound':
       return jobs;
@@ -3687,6 +3780,7 @@ function renderDashboardDrawerContent() {
 }
 
 function renderDashboard() {
+  syncDashboardDateFilterUI();
   const grid = document.getElementById('dashStatsGrid');
   if (!grid) return;
   const stats = computeDashboardStats();
@@ -3713,7 +3807,8 @@ function renderDashboard() {
     // AUDIT FIX #9 — Recent Activity is derived from the SAME application
     // records shown on the Applications page (sampleApplications), sorted
     // newest-first, so the two views can never disagree.
-    const recent = (sampleApplications || []).map(app => normalizeApplicationRecord(app)).sort((a, b) => new Date(b.dateTime || b.date) - new Date(a.dateTime || a.date)).slice(0, 6);
+    const selectedDateKey = dashboardDateFilterValue || getTodayLocalDateKey();
+    const recent = (sampleApplications || []).map(app => normalizeApplicationRecord(app)).filter(app => getRecordLocalDateKey(app) === selectedDateKey).sort((a, b) => new Date(b.dateTime || b.date) - new Date(a.dateTime || a.date)).slice(0, 6);
     activityList.innerHTML = recent.length ? recent.map(a => {
       const meta = STATUS_META[a.status] || { cls: '', icon: '' };
       return `<div class="activity-item">
@@ -3740,7 +3835,7 @@ function renderDashboard() {
 }
 
 function buildStatusBarsHtml() {
-  const applications = (sampleApplications || []).map(app => normalizeApplicationRecord(app));
+  const applications = getDashboardFilteredData().applications;
   if (applications.length === 0) return '<div class="bar-row"><div class="bar-label">No data</div><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><div class="bar-value">0 (0%)</div></div>';
   const total = applications.length;
   return STATUS_ORDER.map(status => {
@@ -4244,6 +4339,8 @@ const dashboardDrawerSearchEl = document.getElementById('dashboardDrawerSearch')
 if (dashboardDrawerSearchEl) dashboardDrawerSearchEl.addEventListener('input', renderDashboardDrawerContent);
 const dashboardDrawerSortEl = document.getElementById('dashboardDrawerSort');
 if (dashboardDrawerSortEl) dashboardDrawerSortEl.addEventListener('change', renderDashboardDrawerContent);
+const dashboardDateFilterEl = document.getElementById('dashboardDateFilter');
+if (dashboardDateFilterEl) dashboardDateFilterEl.addEventListener('change', handleDashboardDateFilterChange);
 const dashboardDrawerContentEl = document.getElementById('dashboardDrawerContent');
 if (dashboardDrawerContentEl) {
   dashboardDrawerContentEl.addEventListener('click', async (event) => {
