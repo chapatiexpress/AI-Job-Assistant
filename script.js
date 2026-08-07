@@ -770,6 +770,7 @@ function updateTopNavUser() {
 }
 
 function showLoginScreen() {
+  document.body.classList.remove('auth-pending');
   const loginScreen = document.getElementById('loginScreen');
   const topNav = document.getElementById('topNav');
   const pageArea = document.getElementById('pageArea');
@@ -794,6 +795,7 @@ function showLoginScreen() {
 }
 
 function hideLoginScreen() {
+  document.body.classList.remove('auth-pending');
   const loginScreen = document.getElementById('loginScreen');
   const topNav = document.getElementById('topNav');
   const pageArea = document.getElementById('pageArea');
