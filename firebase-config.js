@@ -30,16 +30,13 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+  prompt: "select_account"
+});
 
 async function signInWithGoogle() {
-  try {
-    const result = await signInWithPopup(auth, googleProvider);
-    return result.user;
-  } catch (error) {
-    const message = error && error.message ? error.message : 'Google sign-in failed';
-    console.error('Firebase signInWithPopup failed:', error);
-    throw new Error(message);
-  }
+  const result = await signInWithPopup(auth, googleProvider);
+  return result.user;
 }
 
 function signOutFirebase() {

@@ -915,7 +915,7 @@ function handleTopnavUserAuthClick(event) {
           showToast(`Signed in as ${user.displayName || user.email}`, 'success');
         }
       }).catch(err => {
-        console.error('Google sign-in failed:', err);
+        console.error('Google sign-in failed:', err.code, err.message);
         showToast('Google sign-in failed', 'error');
       });
     }
@@ -3338,10 +3338,28 @@ profileFields.skillsInput.addEventListener('keydown', (e) => {
   }
 });
 
+/* ---------------------------------------------------------------------
+   GOOGLE SIGN-IN — single-strategy popup auth (signInWithPopup only).
+
+   - guardedSignIn wraps window.signInWithGoogle() with a click-time lock
+     (isGoogleSignInInFlight) so a rapid double-click can never open a
+     second popup while one is already in flight (requirement 9).
+   - The click handler calls signInWithGoogle() exactly once per click
+     (requirement 8), never automatically on page load (requirement 7).
+   - On failure, the EXACT Firebase Auth error code and message are
+     logged (requirement 12), and a friendly message is shown inline.
+     Cross-Origin-Opener-Policy console messages are just browser log
+     noise from the SDK's own popup-closing logic — they are not treated
+     as authentication failures anywhere in this handler (requirement 13).
+   --------------------------------------------------------------------- */
+let isGoogleSignInInFlight = false;
+
 const googleSignInBtn = document.getElementById('googleSignInBtn');
 if (googleSignInBtn) {
   googleSignInBtn.addEventListener('click', async () => {
+    if (isGoogleSignInInFlight) return; // guard against duplicate clicks while a popup is open
     if (typeof window.signInWithGoogle !== 'function') return;
+    isGoogleSignInInFlight = true;
     clearLoginError();
     setGoogleSignInButtonLoading(true);
     try {
@@ -3350,10 +3368,11 @@ if (googleSignInBtn) {
         showToast(`Signed in as ${user.displayName || user.email}`, 'success');
       }
     } catch (err) {
-      console.error('Google sign-in failed:', err);
+      console.error("Google sign-in failed:", err.code, err.message);
       showLoginError(err.message || 'Google sign-in failed. Please try again.');
     } finally {
       setGoogleSignInButtonLoading(false);
+      isGoogleSignInInFlight = false;
     }
   });
 }
