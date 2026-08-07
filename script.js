@@ -742,6 +742,58 @@ function updateTopNavUser() {
   const username = document.getElementById('topnavUsername');
   if (avatar) avatar.textContent = ((profileState.firstName || 'A').slice(0, 1) + (profileState.lastName || 'U').slice(0, 1)).toUpperCase();
   if (username) username.textContent = profileState.firstName ? `${profileState.firstName}${profileState.lastName ? ' ' + profileState.lastName : ''}` : (profileState.email || 'Admin User');
+  if (authStateUser) {
+    if (avatar) {
+      if (authStateUser.photoURL) {
+        avatar.style.backgroundImage = `url(${authStateUser.photoURL})`;
+        avatar.style.backgroundSize = 'cover';
+        avatar.style.color = 'transparent';
+      } else {
+        avatar.style.backgroundImage = '';
+        avatar.style.color = '#fff';
+        avatar.textContent = (authStateUser.displayName || authStateUser.email || 'User').slice(0, 1).toUpperCase();
+      }
+    }
+    if (username) {
+      username.textContent = authStateUser.displayName || authStateUser.email || 'Signed In User';
+    }
+  }
+}
+
+function handleTopnavUserAuthClick(event) {
+  const target = event.target.closest('.topnav-user');
+  if (!target) return;
+  if (authStateUser) {
+    if (typeof window.signOutFirebase === 'function') {
+      window.signOutFirebase().catch(err => {
+        console.error('Firebase sign-out failed:', err);
+      });
+    }
+    return;
+  }
+  if (typeof window.signInWithGoogle === 'function') {
+    window.signInWithGoogle().then(user => {
+      if (user) {
+        showToast(`Signed in as ${user.displayName || user.email}`, 'success');
+      }
+    }).catch(err => {
+      console.error('Google sign-in failed:', err);
+      showToast('Google sign-in failed', 'error');
+    });
+  }
+}
+
+function initFirebaseAuth() {
+  if (typeof window.subscribeToAuthState !== 'function') return;
+  window.subscribeToAuthState((user) => {
+    authStateUser = user;
+    if (authStateUser && !profileState.email) {
+      profileState.email = authStateUser.email || profileState.email;
+      saveProfileState();
+      populateProfileForm();
+    }
+    updateTopNavUser();
+  });
 }
 
 function renderNotifications() {
@@ -2646,6 +2698,7 @@ const pageContainers = {
 };
 
 /* selectedNodeId declared earlier near connector setup to avoid TDZ */
+let authStateUser = null;
 
 function setActivePage(page) {
   if (!pageContainers[page]) page = 'workflow';
@@ -3136,6 +3189,13 @@ profileFields.skillsInput.addEventListener('keydown', (e) => {
     autoSaveProfileData();
   }
 });
+
+const topnavUserElement = document.querySelector('.topnav-user');
+if (topnavUserElement) {
+  topnavUserElement.addEventListener('click', handleTopnavUserAuthClick);
+}
+
+window.addEventListener('DOMContentLoaded', initFirebaseAuth);
 
 /* click-to-open-profile from the workflow "Load Profile and Resume" card is
    handled by the single delegated listener defined earlier alongside setActivePage. */

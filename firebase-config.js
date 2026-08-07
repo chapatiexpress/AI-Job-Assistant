@@ -9,6 +9,13 @@ import {
   orderBy,
   serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAI65ygEtmMaG2K05tuTPhIxqSR_lSkLN0",
@@ -21,6 +28,26 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
+
+async function signInWithGoogle() {
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (error) {
+    const message = error && error.message ? error.message : 'Google sign-in failed';
+    throw new Error(message);
+  }
+}
+
+function signOutFirebase() {
+  return signOut(auth);
+}
+
+function subscribeToAuthState(callback) {
+  return onAuthStateChanged(auth, callback);
+}
 
 async function saveApplicationToFirestore(application) {
   if (!application || typeof application !== 'object') {
@@ -45,6 +72,10 @@ async function saveApplicationToFirestore(application) {
   return addDoc(collection(db, 'applications'), applicationDoc);
 }
 window.saveApplicationToFirestore = saveApplicationToFirestore;
+  window.auth = auth;
+  window.signInWithGoogle = signInWithGoogle;
+  window.signOutFirebase = signOutFirebase;
+  window.subscribeToAuthState = subscribeToAuthState;
 
 export {
   db,
@@ -55,5 +86,9 @@ export {
   where,
   orderBy,
   serverTimestamp,
+  auth,
+  signInWithGoogle,
+  signOutFirebase,
+  subscribeToAuthState,
   saveApplicationToFirestore
 };
