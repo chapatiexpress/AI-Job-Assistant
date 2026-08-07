@@ -804,6 +804,27 @@ function hideLoginScreen() {
   if (pageArea) pageArea.classList.remove('hidden');
 }
 
+function clearLoginError() {
+  const errorEl = document.getElementById('loginError');
+  if (!errorEl) return;
+  errorEl.textContent = '';
+  errorEl.classList.add('hidden');
+}
+
+function showLoginError(message) {
+  const errorEl = document.getElementById('loginError');
+  if (!errorEl) return;
+  errorEl.textContent = message || 'Google sign-in failed. Please try again.';
+  errorEl.classList.remove('hidden');
+}
+
+function setGoogleSignInButtonLoading(isLoading) {
+  const button = document.getElementById('googleSignInBtn');
+  if (!button) return;
+  button.disabled = isLoading;
+  button.textContent = isLoading ? 'Signing in...' : 'Continue with Google';
+}
+
 function ensureAuthDropdown() {
   if (authDropdownElement) return authDropdownElement;
   const userNode = document.querySelector('.topnav-user');
@@ -920,14 +941,6 @@ function initFirebaseAuth() {
     updateTopNavUser();
   });
 
-  if (typeof window.getRedirectResult === 'function') {
-    window.getRedirectResult().then(result => {
-      if (!result || !result.user) return;
-      console.log('Firebase redirect sign-in completed for user:', result.user.email || result.user.uid);
-    }).catch(err => {
-      console.error('Firebase redirect sign-in failed:', err);
-    });
-  }
 }
 
 function renderNotifications() {
@@ -3327,16 +3340,20 @@ profileFields.skillsInput.addEventListener('keydown', (e) => {
 
 const googleSignInBtn = document.getElementById('googleSignInBtn');
 if (googleSignInBtn) {
-  googleSignInBtn.addEventListener('click', () => {
-    if (typeof window.signInWithGoogle === 'function') {
-      window.signInWithGoogle().then(user => {
-        if (user) {
-          showToast(`Signed in as ${user.displayName || user.email}`, 'success');
-        }
-      }).catch(err => {
-        console.error('Google sign-in failed:', err);
-        showToast('Google sign-in failed', 'error');
-      });
+  googleSignInBtn.addEventListener('click', async () => {
+    if (typeof window.signInWithGoogle !== 'function') return;
+    clearLoginError();
+    setGoogleSignInButtonLoading(true);
+    try {
+      const user = await window.signInWithGoogle();
+      if (user) {
+        showToast(`Signed in as ${user.displayName || user.email}`, 'success');
+      }
+    } catch (err) {
+      console.error('Google sign-in failed:', err);
+      showLoginError(err.message || 'Google sign-in failed. Please try again.');
+    } finally {
+      setGoogleSignInButtonLoading(false);
     }
   });
 }
