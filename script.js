@@ -769,6 +769,39 @@ function updateTopNavUser() {
   }
 }
 
+function showLoginScreen() {
+  const loginScreen = document.getElementById('loginScreen');
+  const topNav = document.getElementById('topNav');
+  const pageArea = document.getElementById('pageArea');
+  const notificationPanel = document.getElementById('notificationPanel');
+  const mobileNavMenu = document.getElementById('mobileNavMenu');
+  const mobileNavBackdrop = document.getElementById('mobileNavBackdrop');
+  const panel = document.getElementById('propertiesPanel');
+  const panelBackdrop = document.getElementById('panelBackdrop');
+  if (loginScreen) loginScreen.classList.remove('hidden');
+  if (topNav) topNav.classList.add('hidden');
+  if (pageArea) pageArea.classList.add('hidden');
+  if (notificationPanel) notificationPanel.classList.add('hidden');
+  if (mobileNavMenu) mobileNavMenu.classList.add('hidden');
+  if (mobileNavBackdrop) mobileNavBackdrop.classList.add('hidden');
+  if (panel) panel.classList.add('hidden');
+  if (panelBackdrop) panelBackdrop.classList.add('hidden');
+  closeAuthDropdown();
+  if (selectedNodeId && nodeState[selectedNodeId]) {
+    nodeState[selectedNodeId].el.classList.remove('selected');
+  }
+  selectedNodeId = null;
+}
+
+function hideLoginScreen() {
+  const loginScreen = document.getElementById('loginScreen');
+  const topNav = document.getElementById('topNav');
+  const pageArea = document.getElementById('pageArea');
+  if (loginScreen) loginScreen.classList.add('hidden');
+  if (topNav) topNav.classList.remove('hidden');
+  if (pageArea) pageArea.classList.remove('hidden');
+}
+
 function ensureAuthDropdown() {
   if (authDropdownElement) return authDropdownElement;
   const userNode = document.querySelector('.topnav-user');
@@ -871,10 +904,15 @@ function initFirebaseAuth() {
   if (typeof window.subscribeToAuthState !== 'function') return;
   window.subscribeToAuthState((user) => {
     authStateUser = user;
-    if (authStateUser && !profileState.email) {
-      profileState.email = authStateUser.email || profileState.email;
-      saveProfileState();
-      populateProfileForm();
+    if (authStateUser) {
+      hideLoginScreen();
+      if (!profileState.email) {
+        profileState.email = authStateUser.email || profileState.email;
+        saveProfileState();
+        populateProfileForm();
+      }
+    } else {
+      showLoginScreen();
     }
     updateTopNavUser();
   });
@@ -3274,6 +3312,22 @@ profileFields.skillsInput.addEventListener('keydown', (e) => {
     autoSaveProfileData();
   }
 });
+
+const googleSignInBtn = document.getElementById('googleSignInBtn');
+if (googleSignInBtn) {
+  googleSignInBtn.addEventListener('click', () => {
+    if (typeof window.signInWithGoogle === 'function') {
+      window.signInWithGoogle().then(user => {
+        if (user) {
+          showToast(`Signed in as ${user.displayName || user.email}`, 'success');
+        }
+      }).catch(err => {
+        console.error('Google sign-in failed:', err);
+        showToast('Google sign-in failed', 'error');
+      });
+    }
+  });
+}
 
 const topnavUserElement = document.querySelector('.topnav-user');
 if (topnavUserElement) {
