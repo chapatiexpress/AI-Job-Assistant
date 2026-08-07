@@ -39,7 +39,7 @@ async function saveApplicationToFirestore(application) {
     company,
     companyNormalized: company.toLowerCase(),
     jobTitle: String(application.jobTitle || application.title || '').trim(),
-    matchScore: Number(application.matchScore || 0),
+    matchScore: Number.isFinite(Number(application.matchScore)) ? Number(application.matchScore) : 0,
     status: String(application.status || '').trim(),
     source: String(application.source || '').trim(),
     jobUrl: String(application.applicationUrl || application.applyUrl || application.jobUrl || '').trim(),
