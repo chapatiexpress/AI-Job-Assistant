@@ -925,7 +925,11 @@ function handleTopnavUserAuthClick(event) {
 }
 
 function initFirebaseAuth() {
-  if (firebaseAuthInitialized || typeof window.subscribeToAuthState !== 'function') return;
+  if (firebaseAuthInitialized) return;
+  if (typeof window.subscribeToAuthState !== 'function') {
+    setTimeout(initFirebaseAuth, 50);
+    return;
+  }
   firebaseAuthInitialized = true;
   window.subscribeToAuthState((user) => {
     authStateUser = user;
