@@ -506,6 +506,7 @@
   .toast.error{background:var(--red);}
   .toast.warning{background:var(--orange);}
   .topnav-user{
+    position:relative;
     display:flex;
     align-items:center;
     gap:8px;
@@ -515,6 +516,50 @@
     transition:background .15s ease;
   }
   .topnav-user:hover{background:#f1f5f9;}
+  .topnav-user-menu{
+    position:absolute;
+    top:calc(100% + 8px);
+    right:0;
+    min-width:220px;
+    max-width:90vw;
+    padding:12px;
+    border-radius:14px;
+    background:#ffffff;
+    border:1px solid #e2e8f0;
+    box-shadow:0 16px 30px rgba(15,23,42,0.12);
+    z-index:150;
+    display:none;
+  }
+  .topnav-user-menu.visible{display:block;}
+  .topnav-user-menu-header{
+    margin-bottom:10px;
+  }
+  .topnav-user-menu-name{
+    font-size:14px;
+    font-weight:700;
+    color:#0f172a;
+    margin-bottom:2px;
+  }
+  .topnav-user-menu-email{
+    font-size:12px;
+    color:#64748b;
+    word-break:break-word;
+  }
+  .topnav-user-menu-signout{
+    width:100%;
+    padding:8px 10px;
+    border-radius:12px;
+    border:1px solid #e2e8f0;
+    background:#fff;
+    color:#0f172a;
+    font-size:13px;
+    cursor:pointer;
+    transition:background .15s ease, border-color .15s ease;
+  }
+  .topnav-user-menu-signout:hover{
+    background:#f8fafc;
+    border-color:#cbd5e1;
+  }
   .topnav-avatar{
     width:28px;height:28px;
     border-radius:50%;

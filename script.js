@@ -757,13 +757,91 @@ function updateTopNavUser() {
     if (username) {
       username.textContent = authStateUser.displayName || authStateUser.email || 'Signed In User';
     }
+  } else {
+    if (avatar) {
+      avatar.style.backgroundImage = '';
+      avatar.style.color = '#fff';
+      avatar.textContent = ((profileState.firstName || 'A').slice(0, 1) + (profileState.lastName || 'U').slice(0, 1)).toUpperCase();
+    }
+    if (username) {
+      username.textContent = profileState.firstName ? `${profileState.firstName}${profileState.lastName ? ' ' + profileState.lastName : ''}` : (profileState.email || 'Admin User');
+    }
+  }
+}
+
+function ensureAuthDropdown() {
+  if (authDropdownElement) return authDropdownElement;
+  const userNode = document.querySelector('.topnav-user');
+  if (!userNode) return null;
+  const dropdown = document.createElement('div');
+  dropdown.className = 'topnav-user-menu';
+  dropdown.innerHTML = `
+    <div class="topnav-user-menu-header">
+      <div class="topnav-user-menu-name"></div>
+      <div class="topnav-user-menu-email"></div>
+    </div>
+    <button type="button" class="topnav-user-menu-signout">Sign out</button>
+  `;
+  userNode.appendChild(dropdown);
+  authDropdownElement = dropdown;
+  return dropdown;
+}
+
+function renderAuthDropdown() {
+  const dropdown = ensureAuthDropdown();
+  if (!dropdown) return;
+  const nameEl = dropdown.querySelector('.topnav-user-menu-name');
+  const emailEl = dropdown.querySelector('.topnav-user-menu-email');
+  if (!authStateUser) {
+    nameEl.textContent = '';
+    emailEl.textContent = '';
+    return;
+  }
+  nameEl.textContent = authStateUser.displayName || authStateUser.email || 'Signed In User';
+  emailEl.textContent = authStateUser.email || '';
+}
+
+function closeAuthDropdown() {
+  const dropdown = authDropdownElement || document.querySelector('.topnav-user-menu');
+  if (!dropdown) return;
+  dropdown.classList.remove('visible');
+  document.removeEventListener('click', handleDocumentClickForAuthDropdown);
+  document.removeEventListener('keydown', handleAuthDropdownKeydown);
+}
+
+function openAuthDropdown() {
+  const dropdown = ensureAuthDropdown();
+  if (!dropdown) return;
+  renderAuthDropdown();
+  dropdown.classList.add('visible');
+  document.addEventListener('click', handleDocumentClickForAuthDropdown);
+  document.addEventListener('keydown', handleAuthDropdownKeydown);
+}
+
+function toggleAuthDropdown() {
+  const dropdown = ensureAuthDropdown();
+  if (!dropdown) return;
+  if (dropdown.classList.contains('visible')) closeAuthDropdown();
+  else openAuthDropdown();
+}
+
+function handleDocumentClickForAuthDropdown(event) {
+  if (event.target.closest('.topnav-user')) return;
+  closeAuthDropdown();
+}
+
+function handleAuthDropdownKeydown(event) {
+  if (event.key === 'Escape') {
+    closeAuthDropdown();
   }
 }
 
 function handleTopnavUserAuthClick(event) {
   const target = event.target.closest('.topnav-user');
   if (!target) return;
-  if (authStateUser) {
+  const signOutBtn = event.target.closest('.topnav-user-menu-signout');
+  if (signOutBtn) {
+    closeAuthDropdown();
     if (typeof window.signOutFirebase === 'function') {
       window.signOutFirebase().catch(err => {
         console.error('Firebase sign-out failed:', err);
@@ -771,16 +849,22 @@ function handleTopnavUserAuthClick(event) {
     }
     return;
   }
-  if (typeof window.signInWithGoogle === 'function') {
-    window.signInWithGoogle().then(user => {
-      if (user) {
-        showToast(`Signed in as ${user.displayName || user.email}`, 'success');
-      }
-    }).catch(err => {
-      console.error('Google sign-in failed:', err);
-      showToast('Google sign-in failed', 'error');
-    });
+  const dropdown = event.target.closest('.topnav-user-menu');
+  if (dropdown) return;
+  if (!authStateUser) {
+    if (typeof window.signInWithGoogle === 'function') {
+      window.signInWithGoogle().then(user => {
+        if (user) {
+          showToast(`Signed in as ${user.displayName || user.email}`, 'success');
+        }
+      }).catch(err => {
+        console.error('Google sign-in failed:', err);
+        showToast('Google sign-in failed', 'error');
+      });
+    }
+    return;
   }
+  toggleAuthDropdown();
 }
 
 function initFirebaseAuth() {
@@ -2699,6 +2783,7 @@ const pageContainers = {
 
 /* selectedNodeId declared earlier near connector setup to avoid TDZ */
 let authStateUser = null;
+let authDropdownElement = null;
 
 function setActivePage(page) {
   if (!pageContainers[page]) page = 'workflow';
@@ -3195,7 +3280,11 @@ if (topnavUserElement) {
   topnavUserElement.addEventListener('click', handleTopnavUserAuthClick);
 }
 
-window.addEventListener('DOMContentLoaded', initFirebaseAuth);
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', initFirebaseAuth);
+} else {
+  initFirebaseAuth();
+}
 
 /* click-to-open-profile from the workflow "Load Profile and Resume" card is
    handled by the single delegated listener defined earlier alongside setActivePage. */
