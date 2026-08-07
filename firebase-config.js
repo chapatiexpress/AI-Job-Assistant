@@ -14,7 +14,9 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
   signOut,
-  onAuthStateChanged
+  onAuthStateChanged,
+  setPersistence,
+  browserLocalPersistence
 } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -35,6 +37,7 @@ googleProvider.setCustomParameters({
 });
 
 async function signInWithGoogle() {
+  await setPersistence(auth, browserLocalPersistence);
   const result = await signInWithPopup(auth, googleProvider);
   return result.user;
 }

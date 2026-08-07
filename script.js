@@ -925,7 +925,8 @@ function handleTopnavUserAuthClick(event) {
 }
 
 function initFirebaseAuth() {
-  if (typeof window.subscribeToAuthState !== 'function') return;
+  if (firebaseAuthInitialized || typeof window.subscribeToAuthState !== 'function') return;
+  firebaseAuthInitialized = true;
   window.subscribeToAuthState((user) => {
     authStateUser = user;
     if (authStateUser) {
@@ -940,7 +941,6 @@ function initFirebaseAuth() {
     }
     updateTopNavUser();
   });
-
 }
 
 function renderNotifications() {
@@ -2847,6 +2847,7 @@ const pageContainers = {
 /* selectedNodeId declared earlier near connector setup to avoid TDZ */
 let authStateUser = null;
 let authDropdownElement = null;
+let firebaseAuthInitialized = false;
 
 function setActivePage(page) {
   if (!pageContainers[page]) page = 'workflow';
