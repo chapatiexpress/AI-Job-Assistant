@@ -932,6 +932,7 @@ function initFirebaseAuth() {
   firebaseAuthInitialized = true;
   window.subscribeToAuthState((user) => {
     authStateUser = user;
+    authStateInitialized = true;
     if (authStateUser) {
       hideLoginScreen();
       if (!profileState.email) {
@@ -939,7 +940,7 @@ function initFirebaseAuth() {
         saveProfileState();
         populateProfileForm();
       }
-    } else {
+    } else if (!authPopupInProgress) {
       showLoginScreen();
     }
     updateTopNavUser();
@@ -2851,6 +2852,8 @@ const pageContainers = {
 let authStateUser = null;
 let authDropdownElement = null;
 let firebaseAuthInitialized = false;
+let authPopupInProgress = false;
+let authStateInitialized = false;
 
 function setActivePage(page) {
   if (!pageContainers[page]) page = 'workflow';
@@ -3364,18 +3367,22 @@ if (googleSignInBtn) {
     if (isGoogleSignInInFlight) return; // guard against duplicate clicks while a popup is open
     if (typeof window.signInWithGoogle !== 'function') return;
     isGoogleSignInInFlight = true;
+    authPopupInProgress = true;
     clearLoginError();
     setGoogleSignInButtonLoading(true);
     try {
       const user = await window.signInWithGoogle();
       if (user) {
+        authStateUser = user;
         hideLoginScreen();
+        updateTopNavUser();
         showToast(`Signed in as ${user.displayName || user.email}`, 'success');
       }
     } catch (err) {
       console.error("Google sign-in failed:", err.code, err.message);
       showLoginError(err.message || 'Google sign-in failed. Please try again.');
     } finally {
+      authPopupInProgress = false;
       setGoogleSignInButtonLoading(false);
       isGoogleSignInInFlight = false;
     }
