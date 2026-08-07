@@ -12,7 +12,8 @@ import {
 import {
   getAuth,
   GoogleAuthProvider,
-  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult as firebaseGetRedirectResult,
   signOut,
   onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
@@ -33,11 +34,18 @@ const googleProvider = new GoogleAuthProvider();
 
 async function signInWithGoogle() {
   try {
-    const result = await signInWithPopup(auth, googleProvider);
-    return result.user;
+    await signInWithRedirect(auth, googleProvider);
   } catch (error) {
-    const message = error && error.message ? error.message : 'Google sign-in failed';
+    const message = error && error.message ? error.message : 'Google redirect sign-in failed';
     throw new Error(message);
+  }
+}
+
+async function getRedirectResult() {
+  try {
+    return await firebaseGetRedirectResult(auth);
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -76,6 +84,7 @@ window.saveApplicationToFirestore = saveApplicationToFirestore;
   window.signInWithGoogle = signInWithGoogle;
   window.signOutFirebase = signOutFirebase;
   window.subscribeToAuthState = subscribeToAuthState;
+  window.getRedirectResult = getRedirectResult;
 
 export {
   db,

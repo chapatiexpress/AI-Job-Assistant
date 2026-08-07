@@ -919,6 +919,15 @@ function initFirebaseAuth() {
     }
     updateTopNavUser();
   });
+
+  if (typeof window.getRedirectResult === 'function') {
+    window.getRedirectResult().then(result => {
+      if (!result || !result.user) return;
+      console.log('Firebase redirect sign-in completed for user:', result.user.email || result.user.uid);
+    }).catch(err => {
+      console.error('Firebase redirect sign-in failed:', err);
+    });
+  }
 }
 
 function renderNotifications() {
