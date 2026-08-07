@@ -877,6 +877,7 @@ function handleTopnavUserAuthClick(event) {
   const signOutBtn = event.target.closest('.topnav-user-menu-signout');
   if (signOutBtn) {
     closeAuthDropdown();
+    showLoginScreen();
     if (typeof window.signOutFirebase === 'function') {
       window.signOutFirebase().catch(err => {
         console.error('Firebase sign-out failed:', err);
