@@ -18,78 +18,6 @@
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;height:100%;background:var(--bg);font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;overflow:hidden;}
-  body.auth-pending #mainWrap,
-  body.auth-pending #loginScreen {
-    display:none !important;
-  }
-  #loginScreen {
-    position:fixed;
-    inset:0;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    background:rgba(247,248,250,0.95);
-    z-index:1200;
-    padding:20px;
-  }
-  .login-card {
-    width:100%;
-    max-width:420px;
-    background:#fff;
-    border:1px solid var(--card-border);
-    border-radius:28px;
-    box-shadow:0 24px 80px rgba(15,23,42,0.12);
-    padding:36px 30px;
-    text-align:center;
-  }
-  .login-card-logo {
-    font-size:48px;
-    margin-bottom:18px;
-  }
-  .login-card-title {
-    margin:0;
-    font-size:22px;
-    font-weight:800;
-    color:var(--text-title);
-    letter-spacing:0.02em;
-  }
-  .login-card-subtitle {
-    margin:14px auto 28px;
-    max-width:300px;
-    color:var(--text-desc);
-    font-size:14px;
-    line-height:1.6;
-  }
-  .btn-google-signin {
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:10px;
-    width:100%;
-    padding:14px 18px;
-    border-radius:14px;
-    border:1px solid #d1d5db;
-    background:#fff;
-    color:#111827;
-    font-weight:700;
-    cursor:pointer;
-    transition:background .15s ease, transform .1s ease, box-shadow .15s ease;
-  }
-  .btn-google-signin:hover {
-    background:#f8fafc;
-    box-shadow:0 8px 18px rgba(15,23,42,0.08);
-  }
-  .google-icon {
-    display:inline-flex;
-    width:24px;
-    height:24px;
-    align-items:center;
-    justify-content:center;
-    border-radius:8px;
-    background:#f3f4f6;
-    font-weight:800;
-    color:#1f2937;
-  }
   #mainWrap{position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;}
   #pageArea{position:relative;flex:1;min-height:0;overflow:auto;}
   #app{position:relative;width:100%;height:100%;flex-direction:column;}
@@ -601,36 +529,6 @@
     box-shadow:0 16px 30px rgba(15,23,42,0.12);
     z-index:150;
     display:none;
-  }
-  .topnav-user-menu.visible{display:block;}
-  .topnav-user-menu-header{
-    margin-bottom:10px;
-  }
-  .topnav-user-menu-name{
-    font-size:14px;
-    font-weight:700;
-    color:#0f172a;
-    margin-bottom:2px;
-  }
-  .topnav-user-menu-email{
-    font-size:12px;
-    color:#64748b;
-    word-break:break-word;
-  }
-  .topnav-user-menu-signout{
-    width:100%;
-    padding:8px 10px;
-    border-radius:12px;
-    border:1px solid #e2e8f0;
-    background:#fff;
-    color:#0f172a;
-    font-size:13px;
-    cursor:pointer;
-    transition:background .15s ease, border-color .15s ease;
-  }
-  .topnav-user-menu-signout:hover{
-    background:#f8fafc;
-    border-color:#cbd5e1;
   }
   .topnav-avatar{
     width:28px;height:28px;
