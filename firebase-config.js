@@ -22,6 +22,30 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
+async function saveApplicationToFirestore(application) {
+  if (!application || typeof application !== 'object') {
+    throw new Error('Invalid application object passed to saveApplicationToFirestore');
+  }
+  const company = String(application.company || '').trim();
+  const applicationDoc = {
+    company,
+    companyNormalized: company.toLowerCase(),
+    jobTitle: String(application.jobTitle || application.title || '').trim(),
+    matchScore: Number(application.matchScore || 0),
+    status: String(application.status || '').trim(),
+    source: String(application.source || '').trim(),
+    jobUrl: String(application.applicationUrl || application.applyUrl || application.jobUrl || '').trim(),
+    retryCount: Number(application.retryCount || 0),
+    failureReason: String(application.failureReason || '').trim(),
+    manualActionReason: String(application.manualActionReason || '').trim(),
+    createdAt: serverTimestamp(),
+    applicationDate: String(application.date || application.applicationDate || '').trim(),
+    workflowRunId: application.runId || null
+  };
+  return addDoc(collection(db, 'applications'), applicationDoc);
+}
+window.saveApplicationToFirestore = saveApplicationToFirestore;
+
 export {
   db,
   collection,
@@ -30,5 +54,6 @@ export {
   query,
   where,
   orderBy,
-  serverTimestamp
+  serverTimestamp,
+  saveApplicationToFirestore
 };

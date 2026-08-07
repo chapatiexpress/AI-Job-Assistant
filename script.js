@@ -687,6 +687,13 @@ function saveAppState() {
   localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState));
 }
 
+function enqueueFirestoreApplicationSave(application) {
+  if (typeof window?.saveApplicationToFirestore !== 'function') return;
+  window.saveApplicationToFirestore(application).catch(err => {
+    console.error('Failed to save application to Firestore:', err, application);
+  });
+}
+
 function addActivity(message) {
   // Guard against the same status-change event being logged twice in a
   // row (e.g. a duplicate call for the same job/status transition).
@@ -1753,6 +1760,7 @@ function persistApplication(job, status, extra = {}) {
   // mark completed/failed, skip) ultimately funnels through.
   updateRunStatsForApplication(normalized, status);
   saveAppState();
+  enqueueFirestoreApplicationSave(normalized);
   syncApplicationViews();
   return normalized;
 }
