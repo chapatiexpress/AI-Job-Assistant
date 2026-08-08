@@ -1284,13 +1284,18 @@ function getTodaySubmittedApplicationsCount(apps = sampleApplications) {
 }
 
 /* Builds the set of jobKeys that already exist among stored applications
-   (any status) — used to decide whether a newly-found job is a duplicate
-   of something already processed in a previous run (or earlier in this
-   one). */
+   used to decide whether a newly-found job is a duplicate of something
+   already processed in a previous run (or earlier in this one).
+   A "Skipped" record (duplicate/below-threshold/rejected/etc.) never
+   represents a genuine submission or an unresolved application, so it must
+   not permanently block that same job from being reconsidered on a future
+   scan — only records that were actually attempted/submitted or are still
+   pending count here. */
 function buildExistingJobKeySet(excludeAppId) {
   const keys = new Set();
   (sampleApplications || []).forEach(app => {
     if (excludeAppId !== undefined && app.id === excludeAppId) return;
+    if (app.status === 'Skipped') return;
     const key = app.jobKey || computeJobKey(app);
     if (key) keys.add(key);
   });
