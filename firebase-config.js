@@ -183,7 +183,6 @@ onAuthStateChanged(auth, (user) => {
   }
 });
 
-
 export {
   db,
   collection,
