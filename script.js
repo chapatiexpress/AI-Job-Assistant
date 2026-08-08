@@ -1301,6 +1301,12 @@ function buildExistingCompanyKeySet(excludeAppId) {
   const keys = new Set();
   (sampleApplications || []).forEach(app => {
     if (excludeAppId !== undefined && app.id === excludeAppId) return;
+    // A "Skipped" record (duplicate/below-threshold/rejected/etc.) never
+    // represents a genuine submission or an unresolved application, so it
+    // must not permanently block this company from future scans — only
+    // records that were actually attempted/submitted or are still pending
+    // should count here.
+    if (app.status === 'Skipped') return;
     const companyKey = normalizeCompanyName(app.company || '');
     if (companyKey) keys.add(companyKey);
   });
@@ -1311,7 +1317,10 @@ function findExistingApplicationForCompany(job) {
   if (!job) return null;
   const companyKey = normalizeCompanyName(job.company || '');
   if (!companyKey) return null;
-  return (sampleApplications || []).find(app => normalizeCompanyName(app.company || '') === companyKey);
+  // Same rule as buildExistingCompanyKeySet(): a prior "Skipped" record for
+  // this company must not block a new job at this company from being
+  // considered again.
+  return (sampleApplications || []).find(app => app.status !== 'Skipped' && normalizeCompanyName(app.company || '') === companyKey);
 }
 
 const TEMP_FAILURE_REASONS = [
