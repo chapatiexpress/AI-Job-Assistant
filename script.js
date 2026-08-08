@@ -959,6 +959,12 @@ const jobProviderService = {
         const titleSuffixes = ['II', 'III', 'Lead', 'Senior', 'Junior', ''];
         const count = 8 + Math.floor(Math.random() * 5);
         const jobs = [];
+        /* One runId generated ONCE per fetchJobs() call (not per job/property)
+           and reused as the shared prefix for every job's providerJobId this
+           scan produces — this is what makes each demo scan's jobs unique
+           and stable within that scan, per computeJobKey()'s `pid:` branch,
+           instead of colliding on the small company/title/location space. */
+        const runId = Date.now();
         for (let i = 0; i < count; i++) {
           const role = preferredRoles.length ? preferredRoles[Math.floor(Math.random() * preferredRoles.length)] : titles[Math.floor(Math.random() * titles.length)];
           const company = companies[Math.floor(Math.random() * companies.length)];
@@ -979,6 +985,7 @@ const jobProviderService = {
           const roleTitle = suffix ? `${role} ${suffix}` : role;
           jobs.push({
             id: jobId,
+            providerJobId: `demo-${runId}-${i}`,
             company,
             title: roleTitle,
             jobTitle: roleTitle,
@@ -1013,6 +1020,7 @@ function normalizeJobFromProvider(job, context = {}) {
   const remote = fallbackText(job.remote || job.locationType, 'Remote');
   return {
     id: job.id || `job-${context.index || 0}`,
+    providerJobId: job.providerJobId || job.stableProviderId || job.externalId || '',
     company,
     title,
     jobTitle: title,
